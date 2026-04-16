@@ -9,14 +9,29 @@
 </head>
 <body>
   <div id="mobile-gate" class="card mobile-gate" hidden>
-    <h1>Desktop only</h1>
+    <h1>Please use a desktop computer</h1>
     <p>
-      This tool is designed for desktop browsers with a wallet extension like
-      MetaMask. Mobile wallet browsers use a sandboxed webview that makes it
-      harder to verify what you're signing.
+      Foundation Repair isn't available on mobile devices. This is a deliberate
+      security decision, not a technical limitation.
     </p>
     <p>
-      Please open this page on a laptop or desktop computer.
+      When you sign a transaction on a desktop wallet extension like MetaMask,
+      you can see exactly what contract you're calling, what function is being
+      invoked, and what parameters are being sent — all in a dedicated popup
+      that the website cannot tamper with.
+    </p>
+    <p>
+      Mobile wallet apps open websites inside a built-in browser (a "webview")
+      that the wallet controls. This makes it much harder to independently
+      verify what you're signing, and easier for a compromised or spoofed page
+      to present misleading transaction details. Since this tool directly
+      interacts with your wallet and your NFTs, we don't think that's an
+      acceptable risk.
+    </p>
+    <p>
+      <strong>Open this link on a laptop or desktop computer</strong> with a
+      browser extension wallet (MetaMask, Rabby, Coinbase Wallet, etc.)
+      installed.
     </p>
   </div>
 
