@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Foundation Repair — get your art back</title>
+  <meta name="description" content="A free tool to cancel your Foundation listings and bring your NFTs home before the marketplace shuts down." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="hero">
+    <h1>Foundation Repair</h1>
+    <p class="lede">
+      Foundation is shutting down. If you have art stuck in an auction or a
+      buy-now listing, this tool helps you get it back into your wallet — and
+      optionally burn it — without waiting for Foundation to do it for you.
+    </p>
+    <p class="lede subtle">
+      It's free, open-source, and runs entirely in your browser. Nothing leaves
+      your computer except the transactions <em>you</em> sign in your wallet.
+    </p>
+  </header>
+
+  <section id="wallet-bar" class="card wallet-bar">
+    <div class="wallet-info">
+      <div class="wallet-label">Your wallet</div>
+      <div id="wallet-status" class="wallet-status">Not connected</div>
+      <div id="wallet-detail" class="muted small"></div>
+    </div>
+    <button id="connect-btn" class="btn primary" type="button">Connect wallet</button>
+  </section>
+
+  <section class="card">
+    <h2><span class="step-no">1</span> Pick the artwork</h2>
+    <p class="muted small">
+      Paste the link to the piece on Foundation or Etherscan — we'll figure out
+      the rest. Or type the contract address and token ID by hand if you prefer.
+    </p>
+
+    <label class="full">
+      <span>Foundation or Etherscan link</span>
+      <input
+        id="nft-url"
+        type="text"
+        placeholder="https://foundation.app/@you/…   or   https://etherscan.io/nft/0x…/12345"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <small class="muted">
+        Works with any <code>foundation.app</code> artwork URL or
+        <code>etherscan.io/nft/&lt;contract&gt;/&lt;tokenId&gt;</code> link.
+      </small>
+    </label>
+
+    <details class="advanced">
+      <summary>Or enter contract + token ID manually</summary>
+      <div class="row">
+        <label>
+          <span>NFT contract address</span>
+          <input
+            id="nft-contract"
+            type="text"
+            placeholder="0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <small class="muted">
+            Default is the shared Foundation contract. Custom collections (e.g. Worlds)
+            have their own address.
+          </small>
+        </label>
+        <label>
+          <span>Token ID</span>
+          <input id="token-id" type="text" inputmode="numeric" placeholder="e.g. 12345" autocomplete="off" spellcheck="false" />
+        </label>
+      </div>
+    </details>
+
+    <div class="row">
+      <button id="load-btn" class="btn" type="button">Check this artwork</button>
+    </div>
+    <div id="state-panel" class="state" hidden></div>
+  </section>
+
+  <section class="card">
+    <h2><span class="step-no">2</span> Bring your artwork home</h2>
+    <p class="muted small">
+      If your piece is listed (auction or fixed price), Foundation is holding it
+      in escrow. Cancelling the listing releases it back to your wallet.
+      Nothing is sold, nothing is moved to anyone else — it just comes home.
+    </p>
+
+    <div class="action-card">
+      <div class="action-head">
+        <strong>End the auction</strong>
+        <span id="auction-hint" class="muted small">Lookup to see status</span>
+      </div>
+      <p class="muted small">
+        Only works if nobody has bid yet. If someone's placed a bid, the auction
+        is locked in and can't be cancelled — that's a rule enforced by the
+        contract itself, not by this tool.
+      </p>
+      <div class="row">
+        <label class="grow">
+          <span class="muted small">Auction ID (filled in for you after lookup)</span>
+          <input id="auction-id" type="text" inputmode="numeric" placeholder="auctionId" autocomplete="off" spellcheck="false" />
+        </label>
+        <button id="cancel-auction-btn" class="btn" type="button" disabled>End auction &amp; return NFT</button>
+      </div>
+    </div>
+
+    <div class="action-card">
+      <div class="action-head">
+        <strong>Remove the buy-now price</strong>
+        <span id="buyprice-hint" class="muted small">Lookup to see status</span>
+      </div>
+      <p class="muted small">
+        Delists the piece at a fixed price. The NFT returns to your wallet unless
+        it's also set up as an auction — in which case cancel both.
+      </p>
+      <div class="row">
+        <button id="cancel-buyprice-btn" class="btn" type="button" disabled>Remove price &amp; return NFT</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card danger-card">
+    <h2><span class="step-no">3</span> Burn it (optional)</h2>
+    <p class="muted small">
+      Once the NFT is back in your wallet, you can permanently destroy it here.
+      This is only useful if you want the piece to stop existing on-chain — for
+      most artists, step 2 is all they need.
+    </p>
+    <p class="warn small">
+      Burning is <strong>irreversible</strong>. The token is gone forever.
+      Make absolutely sure this is what you want.
+    </p>
+    <div class="row">
+      <label class="check">
+        <input id="burn-ack" type="checkbox" />
+        <span>I understand this permanently destroys the token.</span>
+      </label>
+    </div>
+    <div class="row">
+      <button id="burn-btn" class="btn danger" type="button" disabled>Burn this NFT forever</button>
+    </div>
+  </section>
+
+  <section id="log" class="card log" aria-live="polite">
+    <h2>What just happened</h2>
+    <ol id="log-items"><li class="muted">Your actions and transaction links will appear here.</li></ol>
+  </section>
+
+  <section class="card faq">
+    <h2>Common questions</h2>
+
+    <details>
+      <summary>Is this going to cost me money?</summary>
+      <p>Every action is a regular Ethereum transaction, so you'll pay the network gas
+      fee (usually a few dollars on mainnet). Nothing goes to this tool — the
+      transaction goes directly to the Foundation contract and costs exactly the
+      same as if you did it yourself on Etherscan.</p>
+    </details>
+
+    <details>
+      <summary>Is it safe?</summary>
+      <p>The tool only calls two public functions on the verified Foundation Market
+      contract (<code>cancelReserveAuction</code> and <code>cancelBuyPrice</code>) and
+      optionally <code>burn</code> on your NFT contract. Everything runs in your browser.
+      You can read the source on GitHub. Every transaction is shown to you in your wallet
+      before you sign it — always double-check what you're signing.</p>
+    </details>
+
+    <details>
+      <summary>I don't have a wallet. What do I do?</summary>
+      <p>You need the same wallet you originally used to list the piece on Foundation —
+      the contract won't let anyone else cancel your listing. If you used MetaMask on
+      Foundation, install the <a href="https://metamask.io" target="_blank" rel="noopener noreferrer">MetaMask browser extension</a>
+      and sign in with the same seed phrase.</p>
+    </details>
+
+    <details>
+      <summary>What if my auction has a bid?</summary>
+      <p>It can't be cancelled. The contract only allows the seller to cancel an auction
+      that has received zero bids. If there's a bid and the auction hasn't ended, you'll
+      have to wait for it to conclude.</p>
+    </details>
+
+    <details>
+      <summary>What does "escrow" mean?</summary>
+      <p>When you list on Foundation, the NFT physically moves from your wallet to the
+      marketplace contract until someone buys it or you cancel. Cancelling moves it back.
+      That's why step 2 says "return NFT" — it's literally coming back to you.</p>
+    </details>
+  </section>
+
+  <footer class="muted small">
+    Foundation Market contract: <a href="https://etherscan.io/address/0xcDA72070E455bb31C7690a170224Ce43623d0B6f" target="_blank" rel="noopener noreferrer">0xcDA7…0B6f</a>.
+    Verified source on <a href="https://sourcify.dev/#/lookup/0xecb3ce1154af51e117d6cf9e05d6bd7f24e4a0e1" target="_blank" rel="noopener noreferrer">Sourcify</a>.
+    Method credit: <a href="https://x.com/LoveFromGaia/status/2044848357516939692" target="_blank" rel="noopener noreferrer">@LoveFromGaia</a>.
+    Free &amp; open source.
+  </footer>
+
+  <script
+    src="vendor/ethers-6.13.4.umd.min.js"
+    integrity="sha384-6Zl0Pc8zjSz8KvmNeXRvUQgY4ryFb+BwDvKCmLYcBME0joAaru491tQgi9B7zsMM"
+    crossorigin="anonymous"
+  ></script>
+  <script src="app.js"></script>
+</body>
+</html>
