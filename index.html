@@ -163,13 +163,17 @@
   <section class="card danger-card">
     <h2><span class="step-no">3</span> Burn it (optional)</h2>
     <p class="muted small">
-      Once the NFT is back in your wallet, you can permanently destroy it here.
-      This is only useful if you want the piece to stop existing on-chain — for
-      most artists, step 2 is all they need.
+      Once the NFT is back in your wallet, you can permanently destroy the version
+      that lives on Foundation's shared contract. The most common reason to do
+      this is so you can <strong>remint the piece on your own sovereign contract</strong>
+      — for example, on <a href="https://manifold.xyz" target="_blank" rel="noopener noreferrer">Manifold</a>
+      or a custom contract you deploy yourself — so the work isn't tied to a
+      marketplace's infrastructure anymore. If you don't want to remint, there's
+      no reason to burn; step 2 is enough.
     </p>
     <p class="warn small">
-      Burning is <strong>irreversible</strong>. The token is gone forever.
-      Make absolutely sure this is what you want.
+      Burning is <strong>irreversible</strong>. Only do this if you have a plan
+      for reminting on a contract you control.
     </p>
     <div class="row">
       <label class="check">
@@ -341,6 +345,18 @@
       <p>When you list on Foundation, the NFT physically moves from your wallet to the
       marketplace contract until someone buys it or you cancel. Cancelling moves it back.
       That's why step 2 says "return NFT" — it's literally coming back to you.</p>
+    </details>
+
+    <details>
+      <summary>Why would I burn a piece? Isn't that destroying my art?</summary>
+      <p>The art itself isn't the token — the art is the image, audio, or video file the
+      token points to. Burning only destroys <em>the specific token on Foundation's
+      shared contract</em>. The common reason artists do this is to remint the same
+      work on a <strong>sovereign contract they control</strong> — often deployed through
+      <a href="https://manifold.xyz" target="_blank" rel="noopener noreferrer">Manifold</a>
+      or as a custom contract. That way the piece isn't dependent on Foundation's
+      infrastructure or anyone else's marketplace to exist on-chain. If you're not
+      planning to remint, there's no reason to burn.</p>
     </details>
   </section>
 
