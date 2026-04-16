@@ -48,6 +48,15 @@
     </p>
   </header>
 
+  <aside class="notice" role="note">
+    <strong>Use at your own risk.</strong> This is a free community tool — no
+    warranty, no support team. The code is
+    <a href="https://github.com/maximus-ai-dev/foundation-repair" target="_blank" rel="noopener noreferrer">public on GitHub</a>,
+    read it before you sign anything. For a full breakdown of the security
+    measures and the risks you're taking,
+    <a href="#security">see the Security &amp; risks section below</a>.
+  </aside>
+
   <section id="wallet-bar" class="card wallet-bar">
     <div class="wallet-info">
       <div class="wallet-label">Your wallet</div>
@@ -176,6 +185,120 @@
   <section id="log" class="card log" aria-live="polite">
     <h2>What just happened</h2>
     <ol id="log-items"><li class="muted">Your actions and transaction links will appear here.</li></ol>
+  </section>
+
+  <section id="security" class="card security">
+    <h2>Security &amp; risks</h2>
+
+    <p>
+      This tool sends transactions from your wallet to a smart contract. That's a
+      serious action — you should understand what's actually happening, what can
+      go wrong, and what we've done to reduce the risk. Read this before you
+      sign anything.
+    </p>
+
+    <h3>What the tool does</h3>
+    <p>
+      It calls three public functions on the
+      <a href="https://etherscan.io/address/0xcDA72070E455bb31C7690a170224Ce43623d0B6f" target="_blank" rel="noopener noreferrer">verified Foundation Market contract</a>
+      (<code>cancelReserveAuction</code>, <code>cancelBuyPrice</code>) and
+      optionally <code>burn</code> on your NFT contract. That's it. No backend,
+      no accounts, no hidden logic, no data collection. The full source is on
+      <a href="https://github.com/maximus-ai-dev/foundation-repair" target="_blank" rel="noopener noreferrer">GitHub</a>.
+    </p>
+
+    <h3>Risks you're taking</h3>
+    <ol class="risk-list">
+      <li>
+        <strong>Human error.</strong> You could paste the wrong token ID or burn
+        the wrong piece. The tool shows a confirmation panel and requires a
+        checkbox for burns, but nothing can protect you from signing a
+        transaction for the wrong NFT.
+      </li>
+      <li>
+        <strong>Your wallet or browser could be compromised.</strong> If your
+        MetaMask is a fake extension, or your browser has malicious extensions,
+        or your OS is infected — no amount of care in this tool matters. Verify
+        your wallet came from the official source.
+      </li>
+      <li>
+        <strong>This tool may have bugs we missed.</strong> The code passed an
+        automated security audit and 64 regression tests, but it has <em>not</em>
+        received a formal human security review. Use it accordingly.
+      </li>
+      <li>
+        <strong>Underlying libraries and contracts might have bugs.</strong> We
+        pin ethers.js to a specific version and rely on Foundation's audited
+        contracts. If either has an undisclosed bug, we inherit it.
+      </li>
+      <li>
+        <strong>Your wallet popup is your last line of defense.</strong> Before
+        clicking "Confirm" in MetaMask or Rabby, <em>always verify</em> the
+        target contract address and function name match what the tool says. Don't
+        trust the website — trust the wallet.
+      </li>
+    </ol>
+
+    <h3>What we've done to reduce the risk</h3>
+    <ul class="risk-list">
+      <li>
+        <strong>No external code at runtime.</strong> ethers.js v6.13.4 is
+        vendored locally and pinned with a cryptographic integrity hash. If
+        anyone tampers with it, your browser refuses to run it.
+      </li>
+      <li>
+        <strong>No HTML injection possible.</strong> Every piece of text on the
+        page is rendered through <code>textContent</code>, never
+        <code>innerHTML</code>. There is no XSS attack surface.
+      </li>
+      <li>
+        <strong>Strict Content Security Policy.</strong> Only scripts from this
+        domain can run. No inline scripts, no <code>eval</code>, no CDN
+        dependencies. External connections are limited to HTTPS only.
+      </li>
+      <li>
+        <strong>Hardcoded transaction targets.</strong> The Foundation contract
+        address and chain ID are constants baked into the code. Nothing a user
+        pastes can redirect a transaction to a different contract.
+      </li>
+      <li>
+        <strong>Hardened URL parser.</strong> The tool only accepts links from
+        the exact <code>etherscan.io</code> and <code>foundation.app</code>
+        domains — not look-alikes like <code>evil-etherscan.io</code>.
+      </li>
+      <li>
+        <strong>Ethereum mainnet only.</strong> The tool refuses to send any
+        write transaction on any other chain, so you can't accidentally
+        broadcast a cancel on the wrong network.
+      </li>
+      <li>
+        <strong>Desktop only.</strong> Mobile wallet browsers make it harder to
+        verify what you're signing, so they're blocked outright.
+      </li>
+      <li>
+        <strong>Clickjacking defenses.</strong> This page cannot be embedded in
+        an iframe, so no malicious site can overlay invisible buttons on top of
+        yours.
+      </li>
+      <li>
+        <strong>Public source + MIT license.</strong> Anyone can read, verify,
+        fork, or host their own copy.
+      </li>
+    </ul>
+
+    <h3>No warranty</h3>
+    <p>
+      Under the MIT license, this software is provided "as is", without warranty
+      of any kind. The authors and contributors are not liable for any loss of
+      funds, NFTs, or data resulting from its use. By using this tool, you
+      accept that responsibility.
+    </p>
+    <p class="muted small">
+      If any of this is unclear, or if the stakes of a specific transaction are
+      high, don't use this tool — use
+      <a href="https://etherscan.io/address/0xcDA72070E455bb31C7690a170224Ce43623d0B6f#writeProxyContract" target="_blank" rel="noopener noreferrer">Etherscan's write-contract interface</a>
+      directly, or wait for Foundation's team to publish their recovery solution.
+    </p>
   </section>
 
   <section class="card faq">
