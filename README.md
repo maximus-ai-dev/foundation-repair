@@ -124,7 +124,7 @@ Deployed via `vercel.json` headers:
 | `default-src` | `'none'` | Deny everything by default; each resource type is explicitly allowed below. |
 | `script-src` | `'self'` | Only scripts from the same origin. No CDN, no inline scripts, no `eval`. |
 | `style-src` | `'self'` | Only stylesheets from the same origin. No inline styles. |
-| `connect-src` | `*` | Allow JSON-RPC calls to any endpoint (the user's wallet determines the RPC URL). |
+| `connect-src` | `https:` | Allow JSON-RPC calls to any HTTPS endpoint (the user's wallet determines the RPC URL). Cleartext `http:`, `ws://`, and `data:` connections are blocked. |
 | `frame-src` / `frame-ancestors` | `'none'` | Prevents the page from being embedded in an iframe (clickjacking defense). |
 | `object-src` | `'none'` | No Flash, Java, or other plugin content. |
 | `form-action` | `'none'` | The page has no forms that submit to a server. |

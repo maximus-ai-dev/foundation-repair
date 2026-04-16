@@ -112,19 +112,22 @@ function parseNftUrl(raw) {
   const isId   = (x) => x && /^\d+$/.test(x);
   // Normalize address: lowercase before checksumming so mixed-case URLs don't throw.
   const norm = (x) => ethers.getAddress(x.toLowerCase());
+  // SECURITY: Exact host match or proper subdomain. Do NOT use .endsWith() directly
+  // because it matches "evil-etherscan.io" as a suffix of "etherscan.io".
+  const hostMatches = (h, domain) => h === domain || h.endsWith("." + domain);
 
   // etherscan.io/nft/<contract>/<tokenId>
-  if (host.endsWith("etherscan.io") && parts[0] === "nft" && isAddr(parts[1]) && isId(parts[2])) {
+  if (hostMatches(host, "etherscan.io") && parts[0] === "nft" && isAddr(parts[1]) && isId(parts[2])) {
     return { contract: norm(parts[1]), tokenId: parts[2] };
   }
   // etherscan.io/token/<contract>?a=<tokenId>
-  if (host.endsWith("etherscan.io") && parts[0] === "token" && isAddr(parts[1])) {
+  if (hostMatches(host, "etherscan.io") && parts[0] === "token" && isAddr(parts[1])) {
     const a = u.searchParams.get("a");
     if (isId(a)) return { contract: norm(parts[1]), tokenId: a };
   }
 
   // foundation.app/...
-  if (host.endsWith("foundation.app")) {
+  if (hostMatches(host, "foundation.app")) {
     // /collections/<contract>/<tokenId>
     const iCol = parts.indexOf("collections");
     if (iCol >= 0 && isAddr(parts[iCol + 1]) && isId(parts[iCol + 2])) {
