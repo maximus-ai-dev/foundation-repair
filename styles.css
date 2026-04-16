@@ -330,6 +330,17 @@ footer {
   line-height: 1.8;
 }
 
+/* --- mobile gate --- */
+
+.mobile-gate {
+  text-align: center;
+  padding: 48px 24px;
+  margin: 60px auto;
+  max-width: 480px;
+}
+.mobile-gate h1 { font-size: 28px; justify-content: center; }
+.mobile-gate p { color: var(--muted); font-size: 16px; margin: 12px 0; }
+
 /* --- responsive --- */
 
 @media (max-width: 520px) {

@@ -110,15 +110,17 @@ function parseNftUrl(raw) {
   const parts = u.pathname.split("/").filter(Boolean);
   const isAddr = (x) => x && /^0x[0-9a-fA-F]{40}$/.test(x);
   const isId   = (x) => x && /^\d+$/.test(x);
+  // Normalize address: lowercase before checksumming so mixed-case URLs don't throw.
+  const norm = (x) => ethers.getAddress(x.toLowerCase());
 
   // etherscan.io/nft/<contract>/<tokenId>
   if (host.endsWith("etherscan.io") && parts[0] === "nft" && isAddr(parts[1]) && isId(parts[2])) {
-    return { contract: ethers.getAddress(parts[1]), tokenId: parts[2] };
+    return { contract: norm(parts[1]), tokenId: parts[2] };
   }
   // etherscan.io/token/<contract>?a=<tokenId>
   if (host.endsWith("etherscan.io") && parts[0] === "token" && isAddr(parts[1])) {
     const a = u.searchParams.get("a");
-    if (isId(a)) return { contract: ethers.getAddress(parts[1]), tokenId: a };
+    if (isId(a)) return { contract: norm(parts[1]), tokenId: a };
   }
 
   // foundation.app/...
@@ -126,7 +128,7 @@ function parseNftUrl(raw) {
     // /collections/<contract>/<tokenId>
     const iCol = parts.indexOf("collections");
     if (iCol >= 0 && isAddr(parts[iCol + 1]) && isId(parts[iCol + 2])) {
-      return { contract: ethers.getAddress(parts[iCol + 1]), tokenId: parts[iCol + 2] };
+      return { contract: norm(parts[iCol + 1]), tokenId: parts[iCol + 2] };
     }
     // /@handle/~/<tokenId>  or  /@handle/<slug>/<tokenId>  or  /<anything>/<tokenId>
     const last = parts[parts.length - 1];
@@ -420,6 +422,32 @@ async function burnToken() {
     log(`Couldn't burn: ${explainRevert(err)}`);
   }
 }
+
+// --- wire up --------------------------------------------------------------
+
+// --- mobile gate ----------------------------------------------------------
+
+function isMobile() {
+  // Only check the user-agent. Screen width doesn't matter — a narrow desktop
+  // browser still has full extension support, which is what we care about.
+  return /Android|iPhone|iPad|iPod|Mobile|webOS/i.test(navigator.userAgent);
+}
+
+function enforceDesktop() {
+  const gate = document.getElementById("mobile-gate");
+  if (!gate) return;
+  if (isMobile()) {
+    gate.hidden = false;
+    // Hide all content after the gate
+    let sibling = gate.nextElementSibling;
+    while (sibling) {
+      sibling.style.display = "none";
+      sibling = sibling.nextElementSibling;
+    }
+  }
+}
+
+enforceDesktop();
 
 // --- wire up --------------------------------------------------------------
 
