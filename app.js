@@ -472,10 +472,22 @@ function renderState(s) {
   const hasBuyPrice   = s.buyPriceSeller !== ethers.ZeroAddress;
   const auctionHasBid = hasAuction && s.auction && s.auction.endTime > 0n;
 
+  // Does the connected wallet actually own the listing? Pieces you once listed
+  // can end up with a different seller if they were sold/transferred. If so,
+  // the contract won't let you cancel — tell the user plainly.
+  const userLower = account?.toLowerCase() || null;
+  const isAuctionSeller  = !!userLower && s.auction && s.auction.seller?.toLowerCase() === userLower;
+  const isBuyPriceSeller = !!userLower && hasBuyPrice && s.buyPriceSeller.toLowerCase() === userLower;
+  const isAnySeller      = isAuctionSeller || isBuyPriceSeller;
+  const listedButNotBySelf = (hasAuction || hasBuyPrice) && userLower && !isAnySeller;
+
   let headlineText, headlineClass;
   if (!hasAuction && !hasBuyPrice) {
     headlineText = "This piece isn't currently listed on Foundation. There's nothing here to cancel.";
     headlineClass = "";
+  } else if (listedButNotBySelf) {
+    headlineText = "This piece is listed on Foundation, but by a different address \u2014 not the wallet you're connected with. Only the current seller can cancel.";
+    headlineClass = "bad";
   } else if (hasAuction && auctionHasBid && !hasBuyPrice) {
     headlineText = "This piece is in an auction that already has a bid. It can't be cancelled until the auction ends.";
     headlineClass = "bad";
@@ -540,8 +552,14 @@ function refreshButtons() {
   const s = lastLookup;
   if (!s) return;
   const auctionHasBid = s.auction && s.auction.endTime > 0n;
-  ui.cancelAuction.disabled = !(s.auctionId > 0n) || auctionHasBid;
-  ui.cancelBuy.disabled     = s.buyPriceSeller === ethers.ZeroAddress;
+  const userLower = account?.toLowerCase() || null;
+  // Only enable cancel if the connected wallet is the current seller of the
+  // listing. Otherwise the contract will revert ("not seller") — better to
+  // keep the button off than let the user spend gas on a guaranteed failure.
+  const isAuctionSeller  = !!userLower && s.auction && s.auction.seller?.toLowerCase() === userLower;
+  const isBuyPriceSeller = !!userLower && s.buyPriceSeller && s.buyPriceSeller !== ethers.ZeroAddress && s.buyPriceSeller.toLowerCase() === userLower;
+  ui.cancelAuction.disabled = !(s.auctionId > 0n) || auctionHasBid || !isAuctionSeller;
+  ui.cancelBuy.disabled     = s.buyPriceSeller === ethers.ZeroAddress || !isBuyPriceSeller;
 }
 
 // --- listings scanner -----------------------------------------------------
@@ -596,21 +614,33 @@ async function findMyListings() {
       if (!seen.has(key)) seen.set(key, { nftContract: nft, tokenId: tid });
     }
 
-    // For each unique (contract, tokenId), check if still active.
+    // For each unique (contract, tokenId), check if still active AND that the
+    // current seller is the connected user. A piece you once listed may have
+    // been sold or transferred and relisted by someone else — historical events
+    // catch those, but the contract won't let you cancel them.
+    const userLower = account.toLowerCase();
     const results = [];
     for (const entry of seen.values()) {
       const [auctionId, bp] = await Promise.all([
         market.getReserveAuctionIdFor(entry.nftContract, entry.tokenId).catch(() => 0n),
         market.getBuyPrice(entry.nftContract, entry.tokenId).catch(() => [ethers.ZeroAddress, 0n]),
       ]);
-      const hasAuction  = auctionId > 0n;
-      const hasBuyPrice = bp[0] !== ethers.ZeroAddress;
-      if (!hasAuction && !hasBuyPrice) continue;
 
+      // Buy price must exist AND belong to the current user.
+      const hasBuyPrice = bp[0] !== ethers.ZeroAddress && bp[0].toLowerCase() === userLower;
+
+      // Auction must exist AND belong to the current user.
       let auction = null;
+      let hasAuction = auctionId > 0n;
       if (hasAuction) {
         try { auction = await market.getReserveAuction(auctionId); } catch {}
+        if (!auction || auction.seller.toLowerCase() !== userLower) {
+          hasAuction = false;
+          auction = null;
+        }
       }
+
+      if (!hasAuction && !hasBuyPrice) continue;
       const auctionHasBid = auction && auction.endTime > 0n;
 
       results.push({
