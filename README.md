@@ -22,7 +22,9 @@ You need two things:
 Then:
 
 1. Open this tool in the browser where your wallet is installed.
-2. Click **Connect wallet** and make sure you're on **Ethereum mainnet**.
+2. Click **Connect wallet**. The tool supports **Ethereum mainnet** and **Base**.
+   If your wallet is on a different chain, a "Switch network" button will
+   appear with a picker of supported chains.
 3. Paste the link to your piece in the first box. Click **Check this artwork**.
 4. The tool will tell you in plain English what's going on — is there an auction?
    A buy-now price? Can it be cancelled?
@@ -42,11 +44,26 @@ contract.
 
 ## Contracts it talks to
 
+Foundation runs on multiple networks. The tool auto-detects which chain your
+wallet is on and points transactions at the right contract:
+
+### Ethereum mainnet (chain 1)
+
 | Purpose | Address |
 | --- | --- |
 | Foundation Market (proxy) | [`0xcDA72070E455bb31C7690a170224Ce43623d0B6f`](https://etherscan.io/address/0xcDA72070E455bb31C7690a170224Ce43623d0B6f) |
 | Foundation Market (verified implementation) | [`0xecb3ce1154af51e117d6cf9e05d6bd7f24e4a0e1`](https://sourcify.dev/#/lookup/0xecb3ce1154af51e117d6cf9e05d6bd7f24e4a0e1) |
 | Shared FND ERC-721 (default NFT contract) | [`0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405`](https://etherscan.io/token/0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405) |
+
+### Base (chain 8453)
+
+| Purpose | Address |
+| --- | --- |
+| Foundation Market (proxy) | [`0x7b503e206dB34148aD77e00afE214034EDF9E3fF`](https://basescan.org/address/0x7b503e206dB34148aD77e00afE214034EDF9E3fF) |
+
+Foundation's Base market uses the same function selectors as the L1 market —
+`cancelReserveAuction(uint256)`, `cancelBuyPrice(address,uint256)`, etc. — so
+the tool's ABI is chain-agnostic.
 
 ## Finding your NFT's contract + token ID (if you need to)
 

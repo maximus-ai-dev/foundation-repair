@@ -7,10 +7,37 @@
 
 "use strict";
 
-const MARKET = "0xcDA72070E455bb31C7690a170224Ce43623d0B6f";
-const FND_SHARED = "0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405";
-const MAINNET_CHAIN_ID = 1n;
-const ETHERSCAN = "https://etherscan.io";
+// Chain registry: every chain this tool supports has its own Foundation Market
+// proxy address, a safe starting block for event scans, and an explorer URL for
+// transaction links. Adding another chain (e.g. Optimism) is a one-entry
+// config change — no code changes elsewhere.
+const CHAINS = {
+  1n: {
+    name: "Ethereum mainnet",
+    shortName: "Ethereum",
+    hex: "0x1",
+    market: "0xcDA72070E455bb31C7690a170224Ce43623d0B6f",
+    defaultNftContract: "0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405", // shared FND contract
+    deployBlock: 13500000n,
+    explorer: "https://etherscan.io",
+  },
+  8453n: {
+    name: "Base",
+    shortName: "Base",
+    hex: "0x2105",
+    market: "0x7b503e206dB34148aD77e00afE214034EDF9E3fF",
+    defaultNftContract: null, // no shared contract on Base; each artist has their own
+    deployBlock: 12290626n,
+    explorer: "https://basescan.org",
+  },
+};
+
+function chain(id) { return CHAINS[id] || null; }
+function isSupportedChain(id) { return !!chain(id); }
+
+// Legacy fallback used by parseInputs when no wallet is connected. Defaults to
+// the shared FND contract on Ethereum mainnet.
+const FND_SHARED = CHAINS[1n].defaultNftContract;
 
 const MARKET_ABI = [
   "function cancelReserveAuction(uint256 auctionId) external",
@@ -31,9 +58,15 @@ const MARKET_ABI = [
   "error NFTMarketReserveAuction_Cannot_Cancel_Nonexistent_Auction()"
 ];
 
-// Safe starting block — Foundation Market contract has been active since early 2022.
-// Earlier blocks return empty logs quickly, so a conservative lower bound is fine.
-const MARKET_DEPLOY_BLOCK = 13500000n;
+// Per-chain deploy blocks live in CHAINS[chainId].deployBlock now. Helpers
+// below read from the currently-connected chain.
+
+// Read the market address for the currently-connected chain. Falls back to
+// Ethereum mainnet's market address if no wallet is connected (used by the
+// read-only lookup path and for hardcoded comparisons).
+function currentMarket() { return (chain(chainId) || CHAINS[1n]).market; }
+function currentExplorer() { return (chain(chainId) || CHAINS[1n]).explorer; }
+function currentChainName() { return (chain(chainId) || CHAINS[1n]).name; }
 
 const ERC721_ABI = [
   "function ownerOf(uint256 tokenId) view returns (address)",
@@ -100,7 +133,7 @@ function log(msg, { link } = {}) {
 }
 
 function txLink(hash) {
-  return { href: `${ETHERSCAN}/tx/${hash}`, text: hash.slice(0, 10) + "…" };
+  return { href: `${currentExplorer()}/tx/${hash}`, text: hash.slice(0, 10) + "…" };
 }
 
 function shortAddr(a) {
@@ -162,7 +195,10 @@ function parseNftUrl(raw) {
 
 function requireWallet() {
   if (!signer) throw new Error("Connect your wallet first.");
-  if (chainId !== MAINNET_CHAIN_ID) throw new Error(`Wrong network (chain ${chainId}). Switch to Ethereum mainnet in your wallet.`);
+  if (!isSupportedChain(chainId)) {
+    const supported = Object.values(CHAINS).map((c) => c.name).join(" or ");
+    throw new Error(`Wrong network (chain ${chainId}). Switch to ${supported} in your wallet.`);
+  }
 }
 
 function parseInputs() {
@@ -330,8 +366,9 @@ async function connectWith(wallet) {
     const net = await provider.getNetwork();
     chainId = net.chainId;
 
-    const onMainnet = chainId === MAINNET_CHAIN_ID;
-    ui.walletStatus.textContent = onMainnet ? "Connected" : "Wrong network";
+    const supported = isSupportedChain(chainId);
+    const chainInfo = chain(chainId);
+    ui.walletStatus.textContent = supported ? "Connected" : "Wrong network";
     ui.walletDetail.replaceChildren();
     const walletName = wallet.info?.name;
     if (walletName && walletName !== "wallet") {
@@ -340,30 +377,34 @@ async function connectWith(wallet) {
       ui.walletDetail.append(nameSpan);
     }
     const netSpan = document.createElement("span");
-    netSpan.className = onMainnet ? "ok" : "bad";
-    netSpan.textContent = onMainnet ? "Ethereum mainnet" : friendlyChainName(chainId);
+    netSpan.className = supported ? "ok" : "bad";
+    netSpan.textContent = supported ? chainInfo.name : friendlyChainName(chainId);
     ui.walletDetail.append(netSpan, " \u00b7 " + shortAddr(account));
 
-    // Toggle the connect button: normal "Reconnect", or a prominent "Switch to
-    // Ethereum mainnet" button when the user is on the wrong chain. The single
-    // click listener on the button (set at wire-up time) dispatches based on
-    // this flag, so we don't stack conflicting handlers.
-    if (onMainnet) {
+    // Toggle the connect button: normal "Reconnect", or a prominent "Switch
+    // network" button when the user is on an unsupported chain. With multiple
+    // supported chains, "switch" opens a picker rather than going straight to
+    // mainnet.
+    if (supported) {
       ui.connectBtn.textContent = "Reconnect";
       ui.connectBtn.classList.remove("warn-btn");
       connectBtnMode = "connect";
     } else {
-      ui.connectBtn.textContent = "Switch to Ethereum mainnet";
+      ui.connectBtn.textContent = "Switch network";
       ui.connectBtn.classList.add("warn-btn");
       connectBtnMode = "switch";
     }
 
     // Enable the listings scanner now that we have an address + provider.
-    ui.scanBtn.disabled = !onMainnet;
-    ui.scanBtn.title = onMainnet ? "" : "Switch to Ethereum mainnet first";
+    ui.scanBtn.disabled = !supported;
+    ui.scanBtn.title = supported ? "" : "Switch to a supported network first";
 
-    log(`Connected to ${walletName || "wallet"} as ${shortAddr(account)} on ${onMainnet ? "Ethereum mainnet" : friendlyChainName(chainId)}.`);
-    if (!onMainnet) log("This tool only works on Ethereum mainnet. Click \u201cSwitch to Ethereum mainnet\u201d above to move your wallet over.");
+    const networkLabel = supported ? chainInfo.name : friendlyChainName(chainId);
+    log(`Connected to ${walletName || "wallet"} as ${shortAddr(account)} on ${networkLabel}.`);
+    if (!supported) {
+      const supportedNames = Object.values(CHAINS).map((c) => c.name).join(" or ");
+      log(`This tool works on ${supportedNames}. Click \u201cSwitch network\u201d above to move your wallet over.`);
+    }
 
     eip1193.on?.("accountsChanged", () => location.reload());
     eip1193.on?.("chainChanged",    () => location.reload());
@@ -389,28 +430,65 @@ function friendlyChainName(id) {
   return names[String(id)] || ("chain " + id);
 }
 
-async function switchToMainnet() {
-  if (!eip1193Provider) {
-    log("Connect your wallet first.");
-    return;
+// When the user is on an unsupported chain, show a picker listing every
+// chain we support so they can pick one. If only one chain is supported,
+// switch straight to it without a picker.
+function switchToMainnet() {
+  const supportedChains = Object.entries(CHAINS);
+  if (supportedChains.length === 1) {
+    return switchToChain(supportedChains[0][1]);
   }
+  showChainPicker(supportedChains.map(([, c]) => c));
+}
+
+async function switchToChain(chainInfo) {
+  if (!eip1193Provider) { log("Connect your wallet first."); return; }
   try {
-    log("Asking your wallet to switch to Ethereum mainnet\u2026");
+    log(`Asking your wallet to switch to ${chainInfo.name}\u2026`);
     await eip1193Provider.request({
       method: "wallet_switchEthereumChain",
-      params: [{ chainId: "0x1" }],
+      params: [{ chainId: chainInfo.hex }],
     });
-    // The chainChanged event handler will reload the page, so nothing else to do.
+    // chainChanged event handler reloads the page.
   } catch (err) {
-    // 4001 = user rejected, 4902 = chain not added (shouldn't happen for mainnet but handle it)
     if (err?.code === 4001) {
       log("You cancelled the network switch in your wallet. (Nothing changed.)");
     } else if (err?.code === 4902) {
-      log("Your wallet doesn't have Ethereum mainnet added. Open your wallet's network settings and add it manually, then reload this page.");
+      log(`Your wallet doesn't have ${chainInfo.name} added. Open your wallet's network settings and add it manually, then reload this page.`);
     } else {
       log(`Couldn't switch network: ${explainRevert(err)}`);
     }
   }
+}
+
+function showChainPicker(chains) {
+  document.getElementById("chain-picker")?.remove();
+  const overlay = el("div", "picker-overlay");
+  overlay.id = "chain-picker";
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+  const modal = el("div", "picker-modal");
+  modal.append(el("h3", null, "Switch network"));
+  modal.append(el("p", "muted small", "Pick the network your stuck Foundation pieces are on."));
+
+  const list = el("div", "picker-list");
+  for (const c of chains) {
+    const btn = el("button", "picker-item");
+    btn.type = "button";
+    btn.append(el("span", null, c.name));
+    btn.addEventListener("click", () => { overlay.remove(); switchToChain(c); });
+    list.append(btn);
+  }
+  modal.append(list);
+
+  const cancel = el("button", "btn");
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => overlay.remove());
+  modal.append(cancel);
+
+  overlay.append(modal);
+  document.body.append(overlay);
 }
 
 // --- lookup ---------------------------------------------------------------
@@ -420,7 +498,7 @@ async function lookupState() {
     const { nft, tokenId, assumedShared } = parseInputs();
 
     const readProvider = provider || ethers.getDefaultProvider("mainnet");
-    const market = new ethers.Contract(MARKET, MARKET_ABI, readProvider);
+    const market = new ethers.Contract(currentMarket(), MARKET_ABI, readProvider);
     const nftC   = new ethers.Contract(nft,    ERC721_ABI,  readProvider);
 
     log(`Looking up ${shortAddr(nft)} #${tokenId}…`);
@@ -522,7 +600,7 @@ function renderState(s) {
   }
 
   const holderText = s.owner
-    ? (s.owner.toLowerCase() === MARKET.toLowerCase()
+    ? (s.owner.toLowerCase() === currentMarket().toLowerCase()
         ? "Foundation Market (escrow)"
         : shortAddr(s.owner))
     : "unknown";
@@ -573,12 +651,12 @@ function renderState(s) {
 
 async function statePanelCancelAuction(s, btn) {
   if (!signer) { log("Connect your wallet first."); return; }
-  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+  if (!isSupportedChain(chainId)) { log("Switch to a supported network first."); return; }
   const originalText = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Confirm in your wallet\u2026";
   try {
-    const market = new ethers.Contract(MARKET, MARKET_ABI, signer);
+    const market = new ethers.Contract(currentMarket(), MARKET_ABI, signer);
     log(`Ending auction for token #${s.tokenId} \u2014 confirm in your wallet\u2026`);
     const tx = await market.cancelReserveAuction(s.auctionId);
     btn.textContent = "Mining\u2026";
@@ -595,12 +673,12 @@ async function statePanelCancelAuction(s, btn) {
 
 async function statePanelCancelBuyPrice(s, btn) {
   if (!signer) { log("Connect your wallet first."); return; }
-  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+  if (!isSupportedChain(chainId)) { log("Switch to a supported network first."); return; }
   const originalText = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Confirm in your wallet\u2026";
   try {
-    const market = new ethers.Contract(MARKET, MARKET_ABI, signer);
+    const market = new ethers.Contract(currentMarket(), MARKET_ABI, signer);
     log(`Removing buy-now price for token #${s.tokenId} \u2014 confirm in your wallet\u2026`);
     const tx = await market.cancelBuyPrice(s.nftContract, s.tokenId);
     btn.textContent = "Mining\u2026";
@@ -625,7 +703,7 @@ let scanInFlight = false;
 async function findMyListings() {
   if (scanInFlight) return;
   if (!signer || !account) { log("Connect your wallet first."); return; }
-  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+  if (!isSupportedChain(chainId)) { log("Switch to a supported network first."); return; }
 
   scanInFlight = true;
   ui.scanBtn.disabled = true;
@@ -633,7 +711,7 @@ async function findMyListings() {
   ui.scanBtn.textContent = "Scanning…";
 
   try {
-    const market = new ethers.Contract(MARKET, MARKET_ABI, provider);
+    const market = new ethers.Contract(currentMarket(), MARKET_ABI, provider);
     const latest = BigInt(await provider.getBlockNumber());
     renderScanProgress("Starting scan…", 0);
 
@@ -642,8 +720,8 @@ async function findMyListings() {
     const auctionFilter  = market.filters.ReserveAuctionCreated(account);
 
     const [buyEvents, auctionEvents] = await Promise.all([
-      chunkedQuery(market, buyPriceFilter, MARKET_DEPLOY_BLOCK, latest, "Scanning buy-price listings"),
-      chunkedQuery(market, auctionFilter,  MARKET_DEPLOY_BLOCK, latest, "Scanning auctions"),
+      chunkedQuery(market, buyPriceFilter, chain(chainId).deployBlock, latest, "Scanning buy-price listings"),
+      chunkedQuery(market, auctionFilter,  chain(chainId).deployBlock, latest, "Scanning auctions"),
     ]);
 
     renderScanProgress("Verifying current state…", 0.9);
@@ -704,7 +782,7 @@ async function findMyListings() {
     log(`Scan failed: ${explainRevert(err)}`);
   } finally {
     scanInFlight = false;
-    ui.scanBtn.disabled = chainId !== MAINNET_CHAIN_ID;
+    ui.scanBtn.disabled = !isSupportedChain(chainId);
     ui.scanBtn.textContent = originalLabel;
   }
 }
@@ -1081,11 +1159,11 @@ function buildScanRow(r) {
 
 async function rowCancelAuction(r, rowEl, btn) {
   if (!signer) { log("Connect your wallet first."); return; }
-  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+  if (!isSupportedChain(chainId)) { log("Switch to a supported network first."); return; }
 
   setRowBusy(rowEl, "Confirm in your wallet\u2026");
   try {
-    const market = new ethers.Contract(MARKET, MARKET_ABI, signer);
+    const market = new ethers.Contract(currentMarket(), MARKET_ABI, signer);
     log(`Ending auction for token #${r.tokenId} \u2014 confirm in your wallet\u2026`);
     const tx = await market.cancelReserveAuction(r.auctionId);
     setRowBusy(rowEl, "Mining\u2026 waiting for confirmation");
@@ -1101,11 +1179,11 @@ async function rowCancelAuction(r, rowEl, btn) {
 
 async function rowCancelBuyPrice(r, rowEl, btn) {
   if (!signer) { log("Connect your wallet first."); return; }
-  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+  if (!isSupportedChain(chainId)) { log("Switch to a supported network first."); return; }
 
   setRowBusy(rowEl, "Confirm in your wallet\u2026");
   try {
-    const market = new ethers.Contract(MARKET, MARKET_ABI, signer);
+    const market = new ethers.Contract(currentMarket(), MARKET_ABI, signer);
     log(`Removing buy-now price for token #${r.tokenId} \u2014 confirm in your wallet\u2026`);
     const tx = await market.cancelBuyPrice(r.nftContract, r.tokenId);
     setRowBusy(rowEl, "Mining\u2026 waiting for confirmation");
@@ -1179,7 +1257,7 @@ function buildBurnedRow(r, txHash) {
   status.append(el("span", "bad", "\uD83D\uDD25 Burned"));
   if (txHash) {
     const a = document.createElement("a");
-    a.href = `${ETHERSCAN}/tx/${txHash}`;
+    a.href = `${currentExplorer()}/tx/${txHash}`;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     a.textContent = " view tx";
@@ -1194,7 +1272,7 @@ function buildBurnedRow(r, txHash) {
 
 async function rowBurn(r, rowEl, btn) {
   if (!signer) { log("Connect your wallet first."); return; }
-  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+  if (!isSupportedChain(chainId)) { log("Switch to a supported network first."); return; }
 
   setRowBusy(rowEl, "Confirm burn in your wallet\u2026");
   try {
@@ -1202,7 +1280,7 @@ async function rowBurn(r, rowEl, btn) {
     const readC = new ethers.Contract(r.nftContract, ERC721_ABI, provider);
     let owner = null;
     try { owner = await readC.ownerOf(r.tokenId); } catch {}
-    if (owner && owner.toLowerCase() === MARKET.toLowerCase()) {
+    if (owner && owner.toLowerCase() === currentMarket().toLowerCase()) {
       throw new Error("This NFT is still held by Foundation Market. Cancel the listing first.");
     }
     if (owner && owner.toLowerCase() !== account.toLowerCase()) {
@@ -1249,7 +1327,7 @@ function clearRowBusy(rowEl) {
 // left to cancel, mark the row done. Otherwise show what remains.
 async function rerenderRowAfterCancel(r, rowEl) {
   try {
-    const market = new ethers.Contract(MARKET, MARKET_ABI, provider);
+    const market = new ethers.Contract(currentMarket(), MARKET_ABI, provider);
     const [auctionId, bp] = await Promise.all([
       market.getReserveAuctionIdFor(r.nftContract, r.tokenId).catch(() => 0n),
       market.getBuyPrice(r.nftContract, r.tokenId).catch(() => [ethers.ZeroAddress, 0n]),
@@ -1301,7 +1379,7 @@ async function burnToken() {
     const readC = new ethers.Contract(nft, ERC721_ABI, provider);
     let owner = null;
     try { owner = await readC.ownerOf(tokenId); } catch {}
-    if (owner && owner.toLowerCase() === MARKET.toLowerCase()) {
+    if (owner && owner.toLowerCase() === currentMarket().toLowerCase()) {
       throw new Error("This NFT is still held by Foundation Market (escrowed for an auction or buy price). Cancel the listing first, then burn.");
     }
     if (owner && owner.toLowerCase() !== account.toLowerCase()) {
