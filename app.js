@@ -55,6 +55,8 @@ let signer   = null;      // ethers.Signer
 let account  = null;      // string
 let chainId  = null;      // bigint
 let lastLookup = null;
+let eip1193Provider = null; // the raw EIP-1193 provider, retained for chain-switch calls
+let connectBtnMode = "connect"; // "connect" | "switch" — controls what the wallet-bar button does
 
 // --- helpers --------------------------------------------------------------
 
@@ -303,6 +305,7 @@ function showWalletPicker(wallets) {
 async function connectWith(wallet) {
   try {
     const eip1193 = wallet.provider;
+    eip1193Provider = eip1193;
     provider = new ethers.BrowserProvider(eip1193, "any");
     await provider.send("eth_requestAccounts", []);
     signer = await provider.getSigner();
@@ -311,7 +314,7 @@ async function connectWith(wallet) {
     chainId = net.chainId;
 
     const onMainnet = chainId === MAINNET_CHAIN_ID;
-    ui.walletStatus.textContent = onMainnet ? "Connected" : "Connected (wrong network)";
+    ui.walletStatus.textContent = onMainnet ? "Connected" : "Wrong network";
     ui.walletDetail.replaceChildren();
     const walletName = wallet.info?.name;
     if (walletName && walletName !== "wallet") {
@@ -321,16 +324,71 @@ async function connectWith(wallet) {
     }
     const netSpan = document.createElement("span");
     netSpan.className = onMainnet ? "ok" : "bad";
-    netSpan.textContent = onMainnet ? "Ethereum mainnet" : "chain " + chainId;
+    netSpan.textContent = onMainnet ? "Ethereum mainnet" : friendlyChainName(chainId);
     ui.walletDetail.append(netSpan, " \u00b7 " + shortAddr(account));
-    ui.connectBtn.textContent = "Reconnect";
-    log(`Connected to ${walletName || "wallet"} as ${shortAddr(account)} on ${onMainnet ? "Ethereum mainnet" : "chain " + chainId}.`);
-    if (!onMainnet) log("\u26A0 Switch to Ethereum mainnet in your wallet before cancelling anything.");
+
+    // Toggle the connect button: normal "Reconnect", or a prominent "Switch to
+    // Ethereum mainnet" button when the user is on the wrong chain. The single
+    // click listener on the button (set at wire-up time) dispatches based on
+    // this flag, so we don't stack conflicting handlers.
+    if (onMainnet) {
+      ui.connectBtn.textContent = "Reconnect";
+      ui.connectBtn.classList.remove("warn-btn");
+      connectBtnMode = "connect";
+    } else {
+      ui.connectBtn.textContent = "Switch to Ethereum mainnet";
+      ui.connectBtn.classList.add("warn-btn");
+      connectBtnMode = "switch";
+    }
+
+    log(`Connected to ${walletName || "wallet"} as ${shortAddr(account)} on ${onMainnet ? "Ethereum mainnet" : friendlyChainName(chainId)}.`);
+    if (!onMainnet) log("This tool only works on Ethereum mainnet. Click \u201cSwitch to Ethereum mainnet\u201d above to move your wallet over.");
 
     eip1193.on?.("accountsChanged", () => location.reload());
     eip1193.on?.("chainChanged",    () => location.reload());
   } catch (err) {
     log(`Connection failed: ${explainRevert(err)}`);
+  }
+}
+
+// Friendly chain names for common non-mainnet chains so users see "Polygon"
+// instead of "chain 137".
+function friendlyChainName(id) {
+  const names = {
+    "1": "Ethereum mainnet",
+    "10": "Optimism",
+    "56": "BNB Chain",
+    "137": "Polygon",
+    "8453": "Base",
+    "42161": "Arbitrum One",
+    "43114": "Avalanche",
+    "11155111": "Sepolia testnet",
+    "17000": "Holesky testnet",
+  };
+  return names[String(id)] || ("chain " + id);
+}
+
+async function switchToMainnet() {
+  if (!eip1193Provider) {
+    log("Connect your wallet first.");
+    return;
+  }
+  try {
+    log("Asking your wallet to switch to Ethereum mainnet\u2026");
+    await eip1193Provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: "0x1" }],
+    });
+    // The chainChanged event handler will reload the page, so nothing else to do.
+  } catch (err) {
+    // 4001 = user rejected, 4902 = chain not added (shouldn't happen for mainnet but handle it)
+    if (err?.code === 4001) {
+      log("You cancelled the network switch in your wallet. (Nothing changed.)");
+    } else if (err?.code === 4902) {
+      log("Your wallet doesn't have Ethereum mainnet added. Open your wallet's network settings and add it manually, then reload this page.");
+    } else {
+      log(`Couldn't switch network: ${explainRevert(err)}`);
+    }
   }
 }
 
@@ -566,7 +624,10 @@ enforceDesktop();
 
 // --- wire up --------------------------------------------------------------
 
-ui.connectBtn.addEventListener("click", connect);
+ui.connectBtn.addEventListener("click", () => {
+  if (connectBtnMode === "switch") switchToMainnet();
+  else connect();
+});
 ui.loadBtn.addEventListener("click", lookupState);
 ui.cancelAuction.addEventListener("click", cancelAuction);
 ui.cancelBuy.addEventListener("click", cancelBuyPrice);

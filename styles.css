@@ -199,6 +199,16 @@ small.muted { font-size: 12px; }
   border-color: #ff8585;
 }
 
+.btn.warn-btn {
+  background: var(--warn);
+  color: #2a1a05;
+  border-color: var(--warn);
+}
+.btn.warn-btn:hover:not(:disabled) {
+  background: #ffcc8f;
+  border-color: #ffcc8f;
+}
+
 /* --- action sub-cards --- */
 
 .action-card {
