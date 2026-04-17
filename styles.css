@@ -386,6 +386,82 @@ footer {
   font-weight: 600;
 }
 
+/* --- scan panel --- */
+
+.scan-panel {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.scan-progress-label {
+  color: var(--muted);
+  font-size: 13px;
+  font-family: var(--mono);
+  margin-bottom: 8px;
+}
+.scan-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--panel-2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.scan-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+.scan-error {
+  color: var(--warn);
+  font-size: 14px;
+}
+
+.scan-header {
+  font-size: 15px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.scan-header strong { color: var(--text); }
+.scan-header .muted { margin-left: 6px; }
+
+.scan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.scan-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.scan-item-info { min-width: 0; flex: 1; }
+.scan-item-title { font-weight: 600; font-size: 14px; }
+.scan-item-sub {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--mono);
+  margin-top: 2px;
+}
+.scan-item-status {
+  font-size: 13px;
+  margin-top: 4px;
+}
+.scan-item-btn {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
 /* --- wallet picker --- */
 
 .picker-overlay {

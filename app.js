@@ -17,8 +17,14 @@ const MARKET_ABI = [
   "function cancelBuyPrice(address nftContract, uint256 tokenId) external",
   "function getReserveAuctionIdFor(address nftContract, uint256 tokenId) view returns (uint256 auctionId)",
   "function getBuyPrice(address nftContract, uint256 tokenId) view returns (address seller, uint256 price)",
-  "function getReserveAuction(uint256 auctionId) view returns (tuple(address nftContract, uint256 tokenId, address seller, uint256 duration, uint256 extensionDuration, uint256 endTime, address bidder, uint256 amount) auction)"
+  "function getReserveAuction(uint256 auctionId) view returns (tuple(address nftContract, uint256 tokenId, address seller, uint256 duration, uint256 extensionDuration, uint256 endTime, address bidder, uint256 amount) auction)",
+  "event BuyPriceSet(address indexed nftContract, uint256 indexed tokenId, address indexed seller, uint256 price)",
+  "event ReserveAuctionCreated(address indexed seller, address indexed nftContract, uint256 indexed tokenId, uint256 duration, uint256 extensionDuration, uint256 reservePrice, uint256 auctionId)"
 ];
+
+// Safe starting block — Foundation Market contract has been active since early 2022.
+// Earlier blocks return empty logs quickly, so a conservative lower bound is fine.
+const MARKET_DEPLOY_BLOCK = 13500000n;
 
 const ERC721_ABI = [
   "function ownerOf(uint256 tokenId) view returns (address)",
@@ -37,7 +43,9 @@ const ui = {
   nftContract:   $("nft-contract"),
   tokenId:       $("token-id"),
   loadBtn:       $("load-btn"),
+  scanBtn:       $("scan-btn"),
   statePanel:    $("state-panel"),
+  scanPanel:     $("scan-panel"),
   auctionId:     $("auction-id"),
   cancelAuction: $("cancel-auction-btn"),
   cancelBuy:     $("cancel-buyprice-btn"),
@@ -341,6 +349,10 @@ async function connectWith(wallet) {
       connectBtnMode = "switch";
     }
 
+    // Enable the listings scanner now that we have an address + provider.
+    ui.scanBtn.disabled = !onMainnet;
+    ui.scanBtn.title = onMainnet ? "" : "Switch to Ethereum mainnet first";
+
     log(`Connected to ${walletName || "wallet"} as ${shortAddr(account)} on ${onMainnet ? "Ethereum mainnet" : friendlyChainName(chainId)}.`);
     if (!onMainnet) log("This tool only works on Ethereum mainnet. Click \u201cSwitch to Ethereum mainnet\u201d above to move your wallet over.");
 
@@ -532,6 +544,240 @@ function refreshButtons() {
   ui.cancelBuy.disabled     = s.buyPriceSeller === ethers.ZeroAddress;
 }
 
+// --- listings scanner -----------------------------------------------------
+// Finds every Foundation Market listing (auction or buy price) where the
+// connected wallet is the seller. Queries event logs via the wallet's own RPC
+// in adaptive-sized chunks, then verifies each hit is still active.
+
+let scanInFlight = false;
+
+async function findMyListings() {
+  if (scanInFlight) return;
+  if (!signer || !account) { log("Connect your wallet first."); return; }
+  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+
+  scanInFlight = true;
+  ui.scanBtn.disabled = true;
+  const originalLabel = ui.scanBtn.textContent;
+  ui.scanBtn.textContent = "Scanning…";
+
+  try {
+    // Check cache first.
+    const cacheKey = "fr-listings:" + account.toLowerCase();
+    const cached = loadScanCache(cacheKey);
+    if (cached) {
+      renderScanResults(cached.listings, true);
+      log(`Showing cached results from ${new Date(cached.when).toLocaleTimeString()}. Click again to rescan.`);
+      localStorage.removeItem(cacheKey); // one-shot cache: second click always rescans
+      return;
+    }
+
+    const market = new ethers.Contract(MARKET, MARKET_ABI, provider);
+    const latest = BigInt(await provider.getBlockNumber());
+    renderScanProgress("Starting scan…", 0);
+
+    // Event filters: seller indexed on both, our address plugged into the seller slot.
+    const buyPriceFilter = market.filters.BuyPriceSet(null, null, account);
+    const auctionFilter  = market.filters.ReserveAuctionCreated(account);
+
+    const [buyEvents, auctionEvents] = await Promise.all([
+      chunkedQuery(market, buyPriceFilter, MARKET_DEPLOY_BLOCK, latest, "Scanning buy-price listings"),
+      chunkedQuery(market, auctionFilter,  MARKET_DEPLOY_BLOCK, latest, "Scanning auctions"),
+    ]);
+
+    renderScanProgress("Verifying current state…", 0.9);
+
+    // Dedupe by (contract, tokenId).
+    const seen = new Map();
+    for (const ev of [...buyEvents, ...auctionEvents]) {
+      const nft = ev.args.nftContract;
+      const tid = ev.args.tokenId.toString();
+      const key = nft.toLowerCase() + "#" + tid;
+      if (!seen.has(key)) seen.set(key, { nftContract: nft, tokenId: tid });
+    }
+
+    // For each unique (contract, tokenId), check if still active.
+    const results = [];
+    for (const entry of seen.values()) {
+      const [auctionId, bp] = await Promise.all([
+        market.getReserveAuctionIdFor(entry.nftContract, entry.tokenId).catch(() => 0n),
+        market.getBuyPrice(entry.nftContract, entry.tokenId).catch(() => [ethers.ZeroAddress, 0n]),
+      ]);
+      const hasAuction  = auctionId > 0n;
+      const hasBuyPrice = bp[0] !== ethers.ZeroAddress;
+      if (!hasAuction && !hasBuyPrice) continue;
+
+      let auction = null;
+      if (hasAuction) {
+        try { auction = await market.getReserveAuction(auctionId); } catch {}
+      }
+      const auctionHasBid = auction && auction.endTime > 0n;
+
+      results.push({
+        nftContract: entry.nftContract,
+        tokenId: entry.tokenId,
+        hasAuction,
+        auctionId,
+        auctionHasBid,
+        hasBuyPrice,
+        buyPriceWei: bp[1],
+      });
+    }
+
+    saveScanCache(cacheKey, results);
+    renderScanResults(results, false);
+    log(`Scan complete: ${results.length} active listing(s) found.`);
+  } catch (err) {
+    renderScanError(explainRevert(err));
+    log(`Scan failed: ${explainRevert(err)}`);
+  } finally {
+    scanInFlight = false;
+    ui.scanBtn.disabled = chainId !== MAINNET_CHAIN_ID;
+    ui.scanBtn.textContent = originalLabel;
+  }
+}
+
+// Query events in adaptive-sized block chunks. Halves the range on RPC errors
+// that suggest the window is too big ("too many results", "block range").
+async function chunkedQuery(contract, filter, from, to, label) {
+  const out = [];
+  let chunk = 500000n;           // start optimistic
+  const minChunk = 5000n;
+  let cursor = from;
+
+  while (cursor <= to) {
+    const end = cursor + chunk > to ? to : cursor + chunk;
+    const pct = Number((cursor - from) * 100n / (to - from + 1n)) / 100;
+    renderScanProgress(`${label}: block ${cursor.toLocaleString()}`, pct * 0.9);
+    try {
+      const logs = await contract.queryFilter(filter, Number(cursor), Number(end));
+      out.push(...logs);
+      cursor = end + 1n;
+      // Ramp back up gently if we'd previously backed off.
+      if (chunk < 500000n) chunk = chunk * 2n;
+    } catch (err) {
+      const msg = (err?.message || "") + (err?.info?.error?.message || "");
+      const looksLikeRangeError = /too many|range|limit|timeout|exceed|result window/i.test(msg);
+      if (!looksLikeRangeError || chunk <= minChunk) throw err;
+      chunk = chunk / 2n;
+      if (chunk < minChunk) chunk = minChunk;
+    }
+  }
+  return out;
+}
+
+function loadScanCache(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Date.now() - parsed.when > 3600_000) return null; // 1-hour TTL
+    // Re-hydrate BigInts that JSON.stringify turned into strings.
+    parsed.listings = parsed.listings.map((l) => ({
+      ...l,
+      auctionId: BigInt(l.auctionId),
+      buyPriceWei: BigInt(l.buyPriceWei),
+    }));
+    return parsed;
+  } catch { return null; }
+}
+
+function saveScanCache(key, listings) {
+  try {
+    const payload = {
+      when: Date.now(),
+      listings: listings.map((l) => ({
+        ...l,
+        auctionId: l.auctionId.toString(),
+        buyPriceWei: l.buyPriceWei.toString(),
+      })),
+    };
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch {}
+}
+
+function renderScanProgress(text, frac) {
+  ui.scanPanel.replaceChildren();
+  const wrap = el("div", "scan-progress");
+  wrap.append(el("div", "scan-progress-label", text));
+  const bar = el("div", "scan-progress-bar");
+  const fill = el("div", "scan-progress-fill");
+  fill.style.width = Math.max(0, Math.min(100, Math.round(frac * 100))) + "%";
+  bar.append(fill);
+  wrap.append(bar);
+  ui.scanPanel.append(wrap);
+  ui.scanPanel.hidden = false;
+}
+
+function renderScanError(msg) {
+  ui.scanPanel.replaceChildren();
+  ui.scanPanel.append(el("div", "scan-error", "Scan failed: " + msg));
+  ui.scanPanel.hidden = false;
+}
+
+function renderScanResults(results, isCached) {
+  ui.scanPanel.replaceChildren();
+
+  const header = el("div", "scan-header");
+  const h = el("strong", null, results.length === 0
+    ? "No active listings found."
+    : `Found ${results.length} active listing${results.length === 1 ? "" : "s"}.`);
+  header.append(h);
+  if (isCached) {
+    header.append(el("span", "muted small", " (cached — click scan again to refresh)"));
+  }
+  ui.scanPanel.append(header);
+
+  if (results.length === 0) {
+    const note = el("p", "muted small",
+      "This scan only covers listings created on the main Foundation Market from this wallet. " +
+      "If you have pieces listed in a Foundation World (a custom collection), they won't appear here.");
+    ui.scanPanel.append(note);
+    ui.scanPanel.hidden = false;
+    return;
+  }
+
+  const list = el("div", "scan-list");
+  for (const r of results) {
+    const row = el("div", "scan-item");
+
+    const info = el("div", "scan-item-info");
+    const title = el("div", "scan-item-title", `Token #${r.tokenId}`);
+    info.append(title);
+    const sub = el("div", "scan-item-sub");
+    sub.append(r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4));
+    info.append(sub);
+
+    const status = el("div", "scan-item-status");
+    if (r.hasAuction && r.hasBuyPrice) {
+      status.append(el("span", "ok", `${fmtEth(r.buyPriceWei)} ETH + auction`));
+    } else if (r.hasBuyPrice) {
+      status.append(el("span", "ok", `Listed for ${fmtEth(r.buyPriceWei)} ETH`));
+    } else if (r.hasAuction && r.auctionHasBid) {
+      status.append(el("span", "bad", "Auction (has bid, locked)"));
+    } else if (r.hasAuction) {
+      status.append(el("span", "ok", "Auction, no bids"));
+    }
+    info.append(status);
+
+    const action = el("button", "btn scan-item-btn");
+    action.type = "button";
+    action.textContent = "Open";
+    action.addEventListener("click", () => {
+      ui.nftUrl.value = "";
+      ui.nftContract.value = r.nftContract;
+      ui.tokenId.value = r.tokenId;
+      lookupState();
+      document.getElementById("state-panel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+
+    row.append(info, action);
+    list.append(row);
+  }
+  ui.scanPanel.append(list);
+  ui.scanPanel.hidden = false;
+}
+
 // --- write actions --------------------------------------------------------
 
 async function cancelAuction() {
@@ -629,6 +875,7 @@ ui.connectBtn.addEventListener("click", () => {
   else connect();
 });
 ui.loadBtn.addEventListener("click", lookupState);
+ui.scanBtn.addEventListener("click", findMyListings);
 ui.cancelAuction.addEventListener("click", cancelAuction);
 ui.cancelBuy.addEventListener("click", cancelBuyPrice);
 ui.burnBtn.addEventListener("click", burnToken);
