@@ -1,10 +1,10 @@
 # Foundation Repair
 
 **A free, browser-based tool to get your art off the [Foundation](https://foundation.app)
-NFT marketplace before it shuts down.** Cancel auctions, cancel fixed-price listings,
-and optionally burn tokens — all by talking directly to Foundation's verified smart
-contract from your own wallet. No accounts, no fees to anyone but Ethereum gas, no
-tracking.
+NFT marketplace before it shuts down.** Cancel auctions and fixed-price listings so
+your pieces come home to your wallet — all by talking directly to Foundation's
+verified smart contracts from your own wallet. No accounts, no fees to anyone but
+Ethereum gas, no tracking.
 
 > ⚠️ Foundation has announced a wind-down. The platform's UI may disappear before
 > your listings expire. This tool bypasses the UI and talks to the contract directly,
@@ -40,7 +40,6 @@ contract.
 | --- | --- | --- |
 | End the auction | `cancelReserveAuction(uint256 auctionId)` on the Foundation Market | Your piece is in a reserve auction and **nobody has bid yet**. (Auctions with bids are locked — even this tool can't cancel them, because the contract forbids it.) |
 | Remove the buy-now price | `cancelBuyPrice(address nftContract, uint256 tokenId)` on the Foundation Market | Your piece has a fixed buy-now price. Removing it brings the NFT back to your wallet. |
-| Burn it | `burn(uint256 tokenId)` on the NFT contract | Optional. Permanently destroys the token. Only works once the NFT is back in your wallet. |
 
 ## Contracts it talks to
 
@@ -164,10 +163,11 @@ Deployed via `vercel.json` headers:
 ### Runtime safety
 
 - **Chain check** — the tool refuses to send any write transaction unless the wallet
-  is on Ethereum mainnet (chain ID 1).
-- **Ownership check before burn** — before submitting a burn, the tool reads
-  `ownerOf(tokenId)` and refuses if the token is still in Foundation Market escrow or
-  owned by a different address.
+  is on a supported chain (Ethereum mainnet or Base).
+- **Seller-match verification** — before enabling a cancel button, the tool reads
+  the current listing's seller from the Foundation contract and confirms it matches
+  the connected wallet. Buttons stay disabled if not, so users never spend gas on a
+  transaction that's guaranteed to revert.
 - **User-approved signing only** — every transaction is surfaced in the user's wallet
   for review. The tool never constructs raw transactions or touches private keys.
 
@@ -191,9 +191,6 @@ each piece's contract/tokenId/auctionId by hand.
 Foundation Repair automates that grunt work. You paste a link, the tool reads the
 contract's view functions (`getReserveAuctionIdFor`, `getBuyPrice`) to tell you what's
 listed, and one click sends the right cancel transaction from your own wallet.
-
-Burn is an optional add-on that's not in the original thread — for artists who'd
-rather destroy a piece than hold it after pulling it off the marketplace.
 
 ## License
 

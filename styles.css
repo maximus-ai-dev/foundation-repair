@@ -189,16 +189,6 @@ small.muted { font-size: 12px; }
   border-color: var(--accent-hover);
 }
 
-.btn.danger {
-  background: var(--danger);
-  color: #fff;
-  border-color: var(--danger);
-}
-.btn.danger:hover:not(:disabled) {
-  background: #ff8585;
-  border-color: #ff8585;
-}
-
 .btn.warn-btn {
   background: var(--warn);
   color: #2a1a05;
@@ -226,11 +216,6 @@ small.muted { font-size: 12px; }
   margin-bottom: 4px;
 }
 .action-head strong { font-size: 15px; }
-
-.danger-card {
-  border-color: var(--danger-border);
-  background: linear-gradient(180deg, var(--panel) 0%, var(--danger-bg) 140%);
-}
 
 /* --- state panel --- */
 
@@ -512,41 +497,6 @@ footer {
 .scan-item.done {
   background: rgba(107, 212, 165, 0.06);
   border-color: rgba(107, 212, 165, 0.3);
-}
-
-.scan-item.burned {
-  background: rgba(255, 107, 107, 0.05);
-  border-color: rgba(255, 107, 107, 0.25);
-  opacity: 0.85;
-}
-
-.scan-item-btn.burn-btn {
-  background: transparent;
-  border-color: var(--border);
-  color: var(--muted);
-}
-.scan-item-btn.burn-btn:hover:not(:disabled) {
-  background: var(--panel-2);
-  color: var(--text);
-}
-.scan-item-btn.burn-btn.danger {
-  background: var(--danger);
-  color: #fff;
-  border-color: var(--danger);
-  animation: fr-pulse 1.2s ease-out infinite;
-}
-
-/* --- burn candidates panel --- */
-
-.burn-candidates {
-  margin-top: 16px;
-}
-.burn-candidates .burn-empty {
-  padding: 14px 16px;
-  background: var(--bg-soft);
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  margin: 0;
 }
 
 /* --- chain switcher button (inside wallet bar) --- */

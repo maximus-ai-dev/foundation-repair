@@ -1,5 +1,5 @@
-// Foundation Repair — cancel listings & burn tokens.
-// Talks directly to the verified Foundation Market proxy on Ethereum mainnet.
+// Foundation Repair — cancel your Foundation listings before the marketplace shuts down.
+// Talks directly to the verified Foundation Market proxy on Ethereum mainnet and Base.
 // No backend, no tracking.
 //
 // Verified source: https://sourcify.dev/#/lookup/0xecb3ce1154af51e117d6cf9e05d6bd7f24e4a0e1
@@ -17,7 +17,6 @@ const CHAINS = {
     shortName: "Ethereum",
     hex: "0x1",
     market: "0xcDA72070E455bb31C7690a170224Ce43623d0B6f",
-    defaultNftContract: "0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405", // shared FND contract
     deployBlock: 13500000n,
     explorer: "https://etherscan.io",
   },
@@ -26,7 +25,6 @@ const CHAINS = {
     shortName: "Base",
     hex: "0x2105",
     market: "0x7b503e206dB34148aD77e00afE214034EDF9E3fF",
-    defaultNftContract: null, // no shared contract on Base; each artist has their own
     deployBlock: 12290626n,
     explorer: "https://basescan.org",
   },
@@ -35,9 +33,10 @@ const CHAINS = {
 function chain(id) { return CHAINS[id] || null; }
 function isSupportedChain(id) { return !!chain(id); }
 
-// Legacy fallback used by parseInputs when no wallet is connected. Defaults to
-// the shared FND contract on Ethereum mainnet.
-const FND_SHARED = CHAINS[1n].defaultNftContract;
+// Fallback used when a foundation.app URL doesn't spell out the contract.
+// The shared FND contract on Ethereum mainnet is a reasonable default since
+// that's where most pre-2024 Foundation pieces live.
+const FND_SHARED = "0x3B3ee1931Dc30C1957379FAc9aba94D1C48a5405";
 
 const MARKET_ABI = [
   "function cancelReserveAuction(uint256 auctionId) external",
@@ -70,15 +69,8 @@ function currentChainName() { return (chain(chainId) || CHAINS[1n]).name; }
 
 const ERC721_ABI = [
   "function ownerOf(uint256 tokenId) view returns (address)",
-  "function burn(uint256 tokenId) external",
-  "function tokenURI(uint256 tokenId) view returns (string)",
-  "function balanceOf(address owner) view returns (uint256)",
-  "function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)",
-  "function supportsInterface(bytes4 interfaceId) view returns (bool)",
-  "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"
+  "function tokenURI(uint256 tokenId) view returns (string)"
 ];
-
-const ERC721_ENUMERABLE_IID = "0x780e9d63";
 
 // --- DOM refs -------------------------------------------------------------
 
@@ -95,7 +87,6 @@ const ui = {
   scanBtn:       $("scan-btn"),
   statePanel:    $("state-panel"),
   scanPanel:     $("scan-panel"),
-  burnPanel:     $("burn-candidates-panel"),
   logItems:      $("log-items"),
 };
 
@@ -795,16 +786,6 @@ async function findMyListings() {
 
     renderScanResults(results);
     log(`Scan complete: ${results.length} active listing(s) found.`);
-
-    // Chain into a burn-candidates scan so artists can see (and burn) pieces
-    // they own on Foundation-deployed contracts. The listings result set is
-    // our main source of truth for which contracts are Foundation-affiliated.
-    renderBurnProgress("Finding Foundation-minted pieces you own\u2026");
-    const candidates = await findBurnCandidates(results);
-    renderBurnCandidates(candidates);
-    if (candidates.length > 0) {
-      log(`Also found ${candidates.length} Foundation-minted piece(s) in your wallet (see the Burn section below).`);
-    }
   } catch (err) {
     renderScanError(explainRevert(err));
     log(`Scan failed: ${explainRevert(err)}`);
@@ -842,144 +823,6 @@ async function chunkedQuery(contract, filter, from, to, label) {
     }
   }
   return out;
-}
-
-// --- burn candidates scanner ---------------------------------------------
-// After the listings scan, we derive the set of "Foundation-deployed"
-// contracts from the scan's events (every contract the user has ever
-// listed on via the Foundation Market) plus, on Ethereum mainnet, the
-// shared FND contract. For each contract, we find the tokens the user
-// currently owns — those are burn candidates.
-
-async function findBurnCandidates(listingsResults) {
-  if (!account) return [];
-  const userLower = account.toLowerCase();
-  const contracts = new Set();
-  // Foundation contracts the user has listed on (past tense — includes
-  // cancelled and sold listings, but that's fine since we verify ownership).
-  for (const r of listingsResults) contracts.add(r.nftContract.toLowerCase());
-  // On Ethereum mainnet, also include the shared FND contract even if
-  // the user never listed from it (they may own minted pieces directly).
-  const cInfo = chain(chainId);
-  if (cInfo?.defaultNftContract) contracts.add(cInfo.defaultNftContract.toLowerCase());
-  // Also need the canonical (checksummed) addresses for ethers calls.
-  const contractAddrs = Array.from(contracts).map((a) => ethers.getAddress(a));
-
-  const out = [];
-  for (const nftContract of contractAddrs) {
-    try {
-      const tokens = await findOwnedTokens(nftContract, userLower);
-      for (const tid of tokens) {
-        out.push({ nftContract, tokenId: tid });
-      }
-    } catch (err) {
-      log(`Couldn't scan ${shortAddr(nftContract)} for burn candidates: ${explainRevert(err)}`);
-    }
-  }
-  return out;
-}
-
-// Find every tokenId on `nftContract` currently owned by `userLower`.
-// Uses ERC721Enumerable when the contract supports it (one balanceOf + N
-// indexed lookups), otherwise falls back to scanning Transfer events where
-// to=user and verifying current ownership.
-async function findOwnedTokens(nftContract, userLower) {
-  const c = new ethers.Contract(nftContract, ERC721_ABI, provider);
-
-  // Try the fast path.
-  let enumerable = false;
-  try { enumerable = await c.supportsInterface(ERC721_ENUMERABLE_IID); } catch {}
-  if (enumerable) {
-    const bal = await c.balanceOf(userLower);
-    const n = Number(bal);
-    const out = [];
-    for (let i = 0; i < n; i++) {
-      try {
-        const tid = await c.tokenOfOwnerByIndex(userLower, BigInt(i));
-        out.push(tid.toString());
-      } catch {}
-    }
-    return out;
-  }
-
-  // Fallback: scan Transfer events with to=user, dedupe, then verify.
-  const latest = BigInt(await provider.getBlockNumber());
-  const deployBlock = chain(chainId).deployBlock;
-  const filter = c.filters.Transfer(null, userLower);
-  renderBurnProgress(`Scanning transfers to your wallet on ${shortAddr(nftContract)}…`);
-  const logs = await chunkedQuery(c, filter, deployBlock, latest, "Transfers to you");
-  const candidates = [...new Set(logs.map((e) => e.args.tokenId.toString()))];
-  const confirmed = [];
-  for (const tid of candidates) {
-    try {
-      const owner = await c.ownerOf(tid);
-      if (owner.toLowerCase() === userLower) confirmed.push(tid);
-    } catch {}
-  }
-  return confirmed;
-}
-
-function renderBurnProgress(text) {
-  ui.burnPanel.replaceChildren();
-  ui.burnPanel.append(el("p", "muted small", text));
-}
-
-function renderBurnCandidates(candidates) {
-  ui.burnPanel.replaceChildren();
-  if (candidates.length === 0) {
-    ui.burnPanel.append(el("p", "muted small",
-      "No Foundation-minted pieces currently in your wallet on this network. If a piece is still listed on Foundation (see above), cancel it first \u2014 it'll return to your wallet and then show up here."));
-    return;
-  }
-  ui.burnPanel.append(el("p", "muted small",
-    `${candidates.length} Foundation-minted piece${candidates.length === 1 ? "" : "s"} in your wallet. Each burn is a separate on-chain transaction; two-click confirm to avoid accidents.`));
-
-  const list = el("div", "scan-list");
-  for (const c of candidates) {
-    list.append(buildBurnCandidateRow(c));
-  }
-  ui.burnPanel.append(list);
-}
-
-function buildBurnCandidateRow(r) {
-  const row = el("div", "scan-item");
-  const info = el("div", "scan-item-info");
-  const titleLine = el("div", "scan-item-title");
-  const nameSpan = el("span", "scan-item-name", `Token #${r.tokenId}`);
-  titleLine.append(nameSpan, " ", buildPreviewLink(r));
-  info.append(titleLine);
-  info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
-  row.append(info);
-
-  // Same two-step confirmation pattern as done-row burn.
-  const actions = el("div", "scan-item-actions");
-  const burnBtn = el("button", "btn scan-item-btn burn-btn");
-  burnBtn.type = "button";
-  burnBtn.textContent = "Burn";
-  burnBtn.title = "Permanently destroy this token";
-
-  let confirming = false;
-  let revertTimer = null;
-  burnBtn.addEventListener("click", () => {
-    if (!confirming) {
-      confirming = true;
-      burnBtn.textContent = "Click again to burn forever";
-      burnBtn.classList.add("danger");
-      revertTimer = setTimeout(() => {
-        confirming = false;
-        burnBtn.textContent = "Burn";
-        burnBtn.classList.remove("danger");
-      }, 5000);
-      return;
-    }
-    clearTimeout(revertTimer);
-    rowBurn(r, row, burnBtn);
-  });
-  actions.append(burnBtn);
-  row.append(actions);
-
-  lazyFillName(r, nameSpan);
-  return row;
 }
 
 // --- metadata preview ----------------------------------------------------
@@ -1364,8 +1207,7 @@ async function rowCancelBuyPrice(r, rowEl, btn) {
 }
 
 // Row shown when a piece has been successfully cancelled and returned to the
-// wallet. Includes an optional inline burn action — two-step confirm, since
-// burns are permanent.
+// wallet.
 function buildDoneRow(r) {
   const row = el("div", "scan-item done");
 
@@ -1378,96 +1220,7 @@ function buildDoneRow(r) {
   info.append(el("div", "scan-item-status", el("span", "ok", "\u2713 Back in your wallet")));
   row.append(info);
   lazyFillName(r, nameSpan);
-
-  const actions = el("div", "scan-item-actions");
-  const burnBtn = el("button", "btn scan-item-btn burn-btn");
-  burnBtn.type = "button";
-  burnBtn.textContent = "Burn";
-  burnBtn.title = "Permanently destroy this token";
-
-  let confirming = false;
-  let revertTimer = null;
-
-  burnBtn.addEventListener("click", () => {
-    if (!confirming) {
-      // First click: arm the button.
-      confirming = true;
-      burnBtn.textContent = "Click again to burn forever";
-      burnBtn.classList.add("danger");
-      // Auto-revert after 5 seconds so accidental first-clicks don't stay armed.
-      revertTimer = setTimeout(() => {
-        confirming = false;
-        burnBtn.textContent = "Burn";
-        burnBtn.classList.remove("danger");
-      }, 5000);
-      return;
-    }
-    // Second click: actually burn.
-    clearTimeout(revertTimer);
-    rowBurn(r, row, burnBtn);
-  });
-
-  actions.append(burnBtn);
-  row.append(actions);
   return row;
-}
-
-function buildBurnedRow(r, txHash) {
-  const row = el("div", "scan-item burned");
-  const info = el("div", "scan-item-info");
-  info.append(el("div", "scan-item-title", `Token #${r.tokenId}`));
-  info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
-  // Note: no preview link on burned rows — the token no longer exists, tokenURI
-  // would revert. Users can still see it via the tx link in the status.
-  const status = el("div", "scan-item-status");
-  status.append(el("span", "bad", "\uD83D\uDD25 Burned"));
-  if (txHash) {
-    const a = document.createElement("a");
-    a.href = `${currentExplorer()}/tx/${txHash}`;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    a.textContent = " view tx";
-    a.className = "small";
-    a.style.marginLeft = "8px";
-    status.append(a);
-  }
-  info.append(status);
-  row.append(info);
-  return row;
-}
-
-async function rowBurn(r, rowEl, btn) {
-  if (!signer) { log("Connect your wallet first."); return; }
-  if (!isSupportedChain(chainId)) { log("Switch to a supported network first."); return; }
-
-  setRowBusy(rowEl, "Confirm burn in your wallet\u2026");
-  try {
-    // Sanity check: only burn if user actually owns the token now.
-    const readC = new ethers.Contract(r.nftContract, ERC721_ABI, provider);
-    let owner = null;
-    try { owner = await readC.ownerOf(r.tokenId); } catch {}
-    if (owner && owner.toLowerCase() === currentMarket().toLowerCase()) {
-      throw new Error("This NFT is still held by Foundation Market. Cancel the listing first.");
-    }
-    if (owner && owner.toLowerCase() !== account.toLowerCase()) {
-      throw new Error(`You don't own this NFT any more (current owner: ${shortAddr(owner)}).`);
-    }
-
-    const nftC = new ethers.Contract(r.nftContract, ERC721_ABI, signer);
-    log(`Burning token #${r.tokenId} \u2014 confirm in your wallet\u2026`);
-    const tx = await nftC.burn(r.tokenId);
-    setRowBusy(rowEl, "Mining\u2026 waiting for confirmation");
-    log("Transaction submitted.", { link: txLink(tx.hash) });
-    await tx.wait();
-    log("\u2713 Token burned. Gone from the blockchain forever.", { link: txLink(tx.hash) });
-    rowEl.replaceWith(buildBurnedRow(r, tx.hash));
-  } catch (err) {
-    log(`Couldn't burn: ${explainRevert(err)}`);
-    clearRowBusy(rowEl);
-    // Reset the burn button to its idle state so the user can try again.
-    btn.textContent = "Burn";
-    btn.classList.remove("danger");
-  }
 }
 
 function setRowBusy(rowEl, text) {
@@ -1510,8 +1263,7 @@ async function rerenderRowAfterCancel(r, rowEl) {
     }
 
     if (!hasAuction && !hasBuyPrice) {
-      // All done for this piece. Replace the row with a "back in wallet" row
-      // that also offers an optional inline burn action.
+      // All done for this piece. Replace the row with a "back in wallet" marker.
       const doneRow = buildDoneRow(r);
       rowEl.replaceWith(doneRow);
     } else {

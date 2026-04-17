@@ -39,8 +39,8 @@
     <h1>Foundation Repair</h1>
     <p class="lede">
       Foundation is shutting down. If you have art stuck in an auction or a
-      buy-now listing, this tool helps you get it back into your wallet — and
-      optionally burn it — without waiting for Foundation to do it for you.
+      buy-now listing, this tool helps you get it back into your wallet —
+      without waiting for Foundation to do it for you.
     </p>
     <p class="lede subtle">
       It's free, open-source, and runs entirely in your browser. Nothing leaves
@@ -67,7 +67,7 @@
   </section>
 
   <section class="card">
-    <h2><span class="step-no">1</span> Pick the artwork</h2>
+    <h2>Pick the artwork</h2>
     <p class="muted small">
       Paste the link to the piece on Foundation or Etherscan — we'll figure out
       the rest. Or type the contract address and token ID by hand if you prefer.
@@ -122,28 +122,6 @@
     <div id="scan-panel" class="scan-panel" hidden></div>
   </section>
 
-  <section class="card danger-card">
-    <h2><span class="step-no">2</span> Burn Foundation-minted pieces (optional)</h2>
-    <p class="muted small">
-      Burning permanently destroys a token on Foundation's contract. The usual
-      reason is to <strong>remint the piece on your own sovereign contract</strong>
-      — for example, on <a href="https://manifold.xyz" target="_blank" rel="noopener noreferrer">Manifold</a>
-      or a custom contract you deploy yourself — so the work isn't tied to a
-      marketplace's infrastructure anymore. If you don't plan to remint, there's
-      no reason to burn.
-    </p>
-    <p class="warn small">
-      Burning is <strong>irreversible</strong>. Only do this if you have a plan
-      for reminting on a contract you control.
-    </p>
-    <div id="burn-candidates-panel" class="burn-candidates">
-      <p class="muted small burn-empty">
-        Click <strong>Find all my listings</strong> above to populate this list.
-        We'll show every Foundation-minted piece you currently own so you can
-        burn just the ones you want to remint elsewhere.
-      </p>
-    </div>
-  </section>
 
   <section id="log" class="card log" aria-live="polite">
     <h2>What just happened</h2>
@@ -164,19 +142,19 @@
     <p>
       It calls three public functions on the
       <a href="https://etherscan.io/address/0xcDA72070E455bb31C7690a170224Ce43623d0B6f" target="_blank" rel="noopener noreferrer">verified Foundation Market contract</a>
-      (<code>cancelReserveAuction</code>, <code>cancelBuyPrice</code>) and
-      optionally <code>burn</code> on your NFT contract. That's it. No backend,
-      no accounts, no hidden logic, no data collection. The full source is on
+      (<code>cancelReserveAuction</code>, <code>cancelBuyPrice</code>). That's
+      it. No backend, no accounts, no hidden logic, no data collection. The
+      full source is on
       <a href="https://github.com/maximus-ai-dev/foundation-repair" target="_blank" rel="noopener noreferrer">GitHub</a>.
     </p>
 
     <h3>Risks you're taking</h3>
     <ol class="risk-list">
       <li>
-        <strong>Human error.</strong> You could paste the wrong token ID or burn
-        the wrong piece. The tool shows a confirmation panel and requires a
-        checkbox for burns, but nothing can protect you from signing a
-        transaction for the wrong NFT.
+        <strong>Human error.</strong> You could paste the wrong token ID and
+        cancel a listing you didn't mean to. The tool shows a confirmation
+        panel, but nothing can protect you from signing a transaction for the
+        wrong NFT.
       </li>
       <li>
         <strong>Your wallet or browser could be compromised.</strong> If your
@@ -279,8 +257,8 @@
     <details>
       <summary>Is it safe?</summary>
       <p>The tool only calls two public functions on the verified Foundation Market
-      contract (<code>cancelReserveAuction</code> and <code>cancelBuyPrice</code>) and
-      optionally <code>burn</code> on your NFT contract. Everything runs in your browser.
+      contract (<code>cancelReserveAuction</code> and <code>cancelBuyPrice</code>).
+      Everything runs in your browser.
       You can read the source on GitHub. Every transaction is shown to you in your wallet
       before you sign it — always double-check what you're signing.</p>
     </details>
@@ -307,17 +285,6 @@
       That's why step 2 says "return NFT" — it's literally coming back to you.</p>
     </details>
 
-    <details>
-      <summary>Why would I burn a piece? Isn't that destroying my art?</summary>
-      <p>The art itself isn't the token — the art is the image, audio, or video file the
-      token points to. Burning only destroys <em>the specific token on Foundation's
-      shared contract</em>. The common reason artists do this is to remint the same
-      work on a <strong>sovereign contract they control</strong> — often deployed through
-      <a href="https://manifold.xyz" target="_blank" rel="noopener noreferrer">Manifold</a>
-      or as a custom contract. That way the piece isn't dependent on Foundation's
-      infrastructure or anyone else's marketplace to exist on-chain. If you're not
-      planning to remint, there's no reason to burn.</p>
-    </details>
   </section>
 
   <footer class="muted small">
