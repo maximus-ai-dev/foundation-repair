@@ -917,6 +917,107 @@ async function rowCancelBuyPrice(r, rowEl, btn) {
   }
 }
 
+// Row shown when a piece has been successfully cancelled and returned to the
+// wallet. Includes an optional inline burn action — two-step confirm, since
+// burns are permanent.
+function buildDoneRow(r) {
+  const row = el("div", "scan-item done");
+
+  const info = el("div", "scan-item-info");
+  info.append(el("div", "scan-item-title", `Token #${r.tokenId}`));
+  info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
+  info.append(el("div", "scan-item-status", el("span", "ok", "\u2713 Back in your wallet")));
+  row.append(info);
+
+  const actions = el("div", "scan-item-actions");
+  const burnBtn = el("button", "btn scan-item-btn burn-btn");
+  burnBtn.type = "button";
+  burnBtn.textContent = "Burn";
+  burnBtn.title = "Permanently destroy this token";
+
+  let confirming = false;
+  let revertTimer = null;
+
+  burnBtn.addEventListener("click", () => {
+    if (!confirming) {
+      // First click: arm the button.
+      confirming = true;
+      burnBtn.textContent = "Click again to burn forever";
+      burnBtn.classList.add("danger");
+      // Auto-revert after 5 seconds so accidental first-clicks don't stay armed.
+      revertTimer = setTimeout(() => {
+        confirming = false;
+        burnBtn.textContent = "Burn";
+        burnBtn.classList.remove("danger");
+      }, 5000);
+      return;
+    }
+    // Second click: actually burn.
+    clearTimeout(revertTimer);
+    rowBurn(r, row, burnBtn);
+  });
+
+  actions.append(burnBtn);
+  row.append(actions);
+  return row;
+}
+
+function buildBurnedRow(r, txHash) {
+  const row = el("div", "scan-item burned");
+  const info = el("div", "scan-item-info");
+  info.append(el("div", "scan-item-title", `Token #${r.tokenId}`));
+  info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
+  const status = el("div", "scan-item-status");
+  status.append(el("span", "bad", "\uD83D\uDD25 Burned"));
+  if (txHash) {
+    const a = document.createElement("a");
+    a.href = `${ETHERSCAN}/tx/${txHash}`;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = " view tx";
+    a.className = "small";
+    a.style.marginLeft = "8px";
+    status.append(a);
+  }
+  info.append(status);
+  row.append(info);
+  return row;
+}
+
+async function rowBurn(r, rowEl, btn) {
+  if (!signer) { log("Connect your wallet first."); return; }
+  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+
+  setRowBusy(rowEl, "Confirm burn in your wallet\u2026");
+  try {
+    // Sanity check: only burn if user actually owns the token now.
+    const readC = new ethers.Contract(r.nftContract, ERC721_ABI, provider);
+    let owner = null;
+    try { owner = await readC.ownerOf(r.tokenId); } catch {}
+    if (owner && owner.toLowerCase() === MARKET.toLowerCase()) {
+      throw new Error("This NFT is still held by Foundation Market. Cancel the listing first.");
+    }
+    if (owner && owner.toLowerCase() !== account.toLowerCase()) {
+      throw new Error(`You don't own this NFT any more (current owner: ${shortAddr(owner)}).`);
+    }
+
+    const nftC = new ethers.Contract(r.nftContract, ERC721_ABI, signer);
+    log(`Burning token #${r.tokenId} \u2014 confirm in your wallet\u2026`);
+    const tx = await nftC.burn(r.tokenId);
+    setRowBusy(rowEl, "Mining\u2026 waiting for confirmation");
+    log("Transaction submitted.", { link: txLink(tx.hash) });
+    await tx.wait();
+    log("\u2713 Token burned. Gone from the blockchain forever.", { link: txLink(tx.hash) });
+    rowEl.replaceWith(buildBurnedRow(r, tx.hash));
+  } catch (err) {
+    log(`Couldn't burn: ${explainRevert(err)}`);
+    clearRowBusy(rowEl);
+    // Reset the burn button to its idle state so the user can try again.
+    btn.textContent = "Burn";
+    btn.classList.remove("danger");
+  }
+}
+
 function setRowBusy(rowEl, text) {
   rowEl.classList.add("busy");
   // Disable all buttons in the row while a tx is in flight.
@@ -957,13 +1058,9 @@ async function rerenderRowAfterCancel(r, rowEl) {
     }
 
     if (!hasAuction && !hasBuyPrice) {
-      // All done for this piece. Replace the row with a "done" marker.
-      const doneRow = el("div", "scan-item done");
-      const info = el("div", "scan-item-info");
-      info.append(el("div", "scan-item-title", `Token #${r.tokenId}`));
-      info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
-      info.append(el("div", "scan-item-status", el("span", "ok", "\u2713 Back in your wallet")));
-      doneRow.append(info);
+      // All done for this piece. Replace the row with a "back in wallet" row
+      // that also offers an optional inline burn action.
+      const doneRow = buildDoneRow(r);
       rowEl.replaceWith(doneRow);
     } else {
       // Piece still has one listing left (e.g., auction cancelled, buy price remains).

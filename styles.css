@@ -514,6 +514,28 @@ footer {
   border-color: rgba(107, 212, 165, 0.3);
 }
 
+.scan-item.burned {
+  background: rgba(255, 107, 107, 0.05);
+  border-color: rgba(255, 107, 107, 0.25);
+  opacity: 0.85;
+}
+
+.scan-item-btn.burn-btn {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--muted);
+}
+.scan-item-btn.burn-btn:hover:not(:disabled) {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.scan-item-btn.burn-btn.danger {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+  animation: fr-pulse 1.2s ease-out infinite;
+}
+
 /* --- wallet picker --- */
 
 .picker-overlay {
