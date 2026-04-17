@@ -696,6 +696,13 @@ function saveScanCache(key, listings) {
   } catch {}
 }
 
+function highlightButton(btn) {
+  if (!btn) return;
+  btn.classList.add("pulse");
+  // Remove after animation completes so repeat clicks retrigger it.
+  setTimeout(() => btn.classList.remove("pulse"), 2400);
+}
+
 function renderScanProgress(text, frac) {
   ui.scanPanel.replaceChildren();
   const wrap = el("div", "scan-progress");
@@ -762,13 +769,33 @@ function renderScanResults(results, isCached) {
 
     const action = el("button", "btn scan-item-btn");
     action.type = "button";
-    action.textContent = "Open";
-    action.addEventListener("click", () => {
+    // Label the button with what it will do — more useful than "Open".
+    if (r.hasAuction && !r.auctionHasBid) {
+      action.textContent = "Cancel this auction";
+    } else if (r.hasAuction && r.auctionHasBid) {
+      action.textContent = "Locked (has bid)";
+      action.disabled = true;
+    } else if (r.hasBuyPrice) {
+      action.textContent = "Remove this price";
+    }
+    action.addEventListener("click", async () => {
+      // Fill the manual fields so the rest of the flow knows what piece we're on.
       ui.nftUrl.value = "";
       ui.nftContract.value = r.nftContract;
       ui.tokenId.value = r.tokenId;
-      lookupState();
-      document.getElementById("state-panel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      await lookupState();
+
+      // Pick the right button for this listing and take the user straight to it.
+      // When both auction and buy price exist, prefer the auction (more urgent
+      // if bids could land on it — once bidden, it locks).
+      let target = null;
+      if (r.hasAuction && !r.auctionHasBid) target = ui.cancelAuction;
+      else if (r.hasBuyPrice) target = ui.cancelBuy;
+
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        highlightButton(target);
+      }
     });
 
     row.append(info, action);
