@@ -124,7 +124,8 @@ Deployed via `vercel.json` headers:
 | `default-src` | `'none'` | Deny everything by default; each resource type is explicitly allowed below. |
 | `script-src` | `'self'` | Only scripts from the same origin. No CDN, no inline scripts, no `eval`. |
 | `style-src` | `'self'` | Only stylesheets from the same origin. No inline styles. |
-| `connect-src` | `https:` | Allow JSON-RPC calls to any HTTPS endpoint (the user's wallet determines the RPC URL). Cleartext `http:`, `ws://`, and `data:` connections are blocked. |
+| `connect-src` | `https:` | Allow JSON-RPC and metadata fetch calls to any HTTPS endpoint (the user's wallet determines the RPC URL; NFT metadata lives on arbitrary IPFS gateways / CDNs). Cleartext `http:`, `ws://`, and `data:` connections are blocked. |
+| `img-src` / `media-src` | `'self' data: https:` | Allow preview images and videos from any HTTPS source. Needed for the NFT preview modal since artwork lives at arbitrary URLs. `<img>` / `<video>` tags cannot execute JavaScript, so this is privacy-loosening (a third-party host can see your IP when you click Preview) but not a code-execution risk. |
 | `frame-src` / `frame-ancestors` | `'none'` | Prevents the page from being embedded in an iframe (clickjacking defense). |
 | `object-src` | `'none'` | No Flash, Java, or other plugin content. |
 | `form-action` | `'none'` | The page has no forms that submit to a server. |

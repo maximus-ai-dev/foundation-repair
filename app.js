@@ -19,7 +19,16 @@ const MARKET_ABI = [
   "function getBuyPrice(address nftContract, uint256 tokenId) view returns (address seller, uint256 price)",
   "function getReserveAuction(uint256 auctionId) view returns (tuple(address nftContract, uint256 tokenId, address seller, uint256 duration, uint256 extensionDuration, uint256 endTime, address bidder, uint256 amount) auction)",
   "event BuyPriceSet(address indexed nftContract, uint256 indexed tokenId, address indexed seller, uint256 price)",
-  "event ReserveAuctionCreated(address indexed seller, address indexed nftContract, uint256 indexed tokenId, uint256 duration, uint256 extensionDuration, uint256 reservePrice, uint256 auctionId)"
+  "event ReserveAuctionCreated(address indexed seller, address indexed nftContract, uint256 indexed tokenId, uint256 duration, uint256 extensionDuration, uint256 reservePrice, uint256 auctionId)",
+  // Known custom errors from the Foundation Market contract. Declaring these
+  // in the ABI lets ethers decode revert data into friendly names instead of
+  // the generic "execution reverted (unknown custom error)".
+  "error NFTMarketReserveAuction_Cannot_Update_Auction_In_Progress()",
+  "error NFTMarketReserveAuction_Not_Matching_Seller(address seller)",
+  "error NFTMarketBuyPrice_Cannot_Cancel_Unset_Price()",
+  "error NFTMarketBuyPrice_Only_Owner_Can_Cancel_Price(address seller)",
+  "error NFTMarketReserveAuction_Already_Listed(uint256 auctionId)",
+  "error NFTMarketReserveAuction_Cannot_Cancel_Nonexistent_Auction()"
 ];
 
 // Safe starting block — Foundation Market contract has been active since early 2022.
@@ -28,7 +37,8 @@ const MARKET_DEPLOY_BLOCK = 13500000n;
 
 const ERC721_ABI = [
   "function ownerOf(uint256 tokenId) view returns (address)",
-  "function burn(uint256 tokenId) external"
+  "function burn(uint256 tokenId) external",
+  "function tokenURI(uint256 tokenId) view returns (string)"
 ];
 
 // --- DOM refs -------------------------------------------------------------
@@ -180,11 +190,15 @@ function explainRevert(err) {
       "NFTMarketReserveAuction_Cannot_Update_Auction_In_Progress":
         "This auction already has a bid, so the contract won't let you cancel it. You'll need to wait for the auction to end.",
       "NFTMarketReserveAuction_Not_Matching_Seller":
-        "Only the wallet that created the auction can cancel it. Make sure you've connected the same wallet you used to list the piece.",
+        "This auction was cancelled already, or belongs to a different wallet. If you just ran the scanner, click \u201cFind all my listings\u201d again to refresh the list.",
+      "NFTMarketReserveAuction_Cannot_Cancel_Nonexistent_Auction":
+        "This auction no longer exists \u2014 probably already cancelled. Click \u201cFind all my listings\u201d again to refresh.",
       "NFTMarketBuyPrice_Cannot_Cancel_Unset_Price":
-        "There's no buy-now price set on this piece, so there's nothing to cancel.",
+        "There's no buy-now price set on this piece \u2014 probably already cancelled. Click \u201cFind all my listings\u201d again to refresh.",
       "NFTMarketBuyPrice_Only_Owner_Can_Cancel_Price":
         "Only the wallet that set the buy price can cancel it. Make sure you've connected the right wallet.",
+      "NFTMarketReserveAuction_Already_Listed":
+        "This piece already has an active listing on Foundation.",
     };
     if (msgs[r.name]) return msgs[r.name];
     return `Contract error: ${r.name}`;
@@ -619,16 +633,6 @@ async function findMyListings() {
   ui.scanBtn.textContent = "Scanning…";
 
   try {
-    // Check cache first.
-    const cacheKey = "fr-listings:" + account.toLowerCase();
-    const cached = loadScanCache(cacheKey);
-    if (cached) {
-      renderScanResults(cached.listings, true);
-      log(`Showing cached results from ${new Date(cached.when).toLocaleTimeString()}. Click again to rescan.`);
-      localStorage.removeItem(cacheKey); // one-shot cache: second click always rescans
-      return;
-    }
-
     const market = new ethers.Contract(MARKET, MARKET_ABI, provider);
     const latest = BigInt(await provider.getBlockNumber());
     renderScanProgress("Starting scan…", 0);
@@ -693,7 +697,6 @@ async function findMyListings() {
       });
     }
 
-    saveScanCache(cacheKey, results);
     renderScanResults(results, false);
     log(`Scan complete: ${results.length} active listing(s) found.`);
   } catch (err) {
@@ -735,34 +738,138 @@ async function chunkedQuery(contract, filter, from, to, label) {
   return out;
 }
 
-function loadScanCache(key) {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (Date.now() - parsed.when > 3600_000) return null; // 1-hour TTL
-    // Re-hydrate BigInts that JSON.stringify turned into strings.
-    parsed.listings = parsed.listings.map((l) => ({
-      ...l,
-      auctionId: BigInt(l.auctionId),
-      buyPriceWei: BigInt(l.buyPriceWei),
-    }));
-    return parsed;
-  } catch { return null; }
+// --- metadata preview ----------------------------------------------------
+// Resolve an ipfs:// or ar:// URI to a usable HTTPS URL. IPFS goes through a
+// public gateway; Arweave's native gateway already serves HTTPS.
+const IPFS_GATEWAY = "https://ipfs.io/ipfs/";
+function resolveMediaUri(uri) {
+  if (!uri) return null;
+  if (uri.startsWith("ipfs://")) {
+    return IPFS_GATEWAY + uri.slice("ipfs://".length).replace(/^ipfs\//, "");
+  }
+  if (uri.startsWith("ar://")) {
+    return "https://arweave.net/" + uri.slice("ar://".length);
+  }
+  if (uri.startsWith("http://")) {
+    // Refuse cleartext HTTP — our CSP blocks it anyway.
+    return null;
+  }
+  return uri; // already https: or data:
 }
 
-function saveScanCache(key, listings) {
+async function fetchMetadata(nftContract, tokenId) {
+  const readProvider = provider || ethers.getDefaultProvider("mainnet");
+  const c = new ethers.Contract(nftContract, ERC721_ABI, readProvider);
+  const tokenURI = await c.tokenURI(tokenId);
+  const url = resolveMediaUri(tokenURI);
+  if (!url) throw new Error("Metadata URI uses a scheme we don't resolve (not ipfs/ar/https).");
+
+  let jsonText = null;
+  // Some tokenURIs are data: URIs containing the JSON directly.
+  if (url.startsWith("data:")) {
+    const comma = url.indexOf(",");
+    if (comma < 0) throw new Error("Malformed data URI.");
+    const payload = url.slice(comma + 1);
+    jsonText = url.slice(5, comma).includes("base64") ? atob(payload) : decodeURIComponent(payload);
+  } else {
+    const resp = await fetch(url, { mode: "cors" });
+    if (!resp.ok) throw new Error(`Metadata fetch failed: HTTP ${resp.status}`);
+    jsonText = await resp.text();
+  }
+
+  let meta;
+  try { meta = JSON.parse(jsonText); }
+  catch { throw new Error("Metadata is not valid JSON."); }
+
+  return {
+    name: typeof meta.name === "string" ? meta.name : null,
+    description: typeof meta.description === "string" ? meta.description : null,
+    image: resolveMediaUri(meta.image) || resolveMediaUri(meta.image_url),
+    animation: resolveMediaUri(meta.animation_url),
+  };
+}
+
+function buildPreviewLink(r) {
+  const a = document.createElement("a");
+  a.href = "#";
+  a.className = "preview-link small";
+  a.textContent = "preview";
+  a.title = "Show image / video";
+  a.addEventListener("click", (e) => {
+    e.preventDefault();
+    openPreviewModal(r.nftContract, r.tokenId);
+  });
+  return a;
+}
+
+async function openPreviewModal(nftContract, tokenId) {
+  // Remove any existing preview modal.
+  document.getElementById("preview-modal")?.remove();
+
+  const overlay = el("div", "picker-overlay");
+  overlay.id = "preview-modal";
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+  const modal = el("div", "picker-modal preview-modal");
+
+  const closeBtn = el("button", "btn small preview-close");
+  closeBtn.type = "button";
+  closeBtn.textContent = "Close";
+  closeBtn.addEventListener("click", () => overlay.remove());
+  modal.append(closeBtn);
+
+  const status = el("p", "muted small preview-status", "Loading metadata\u2026");
+  modal.append(status);
+  overlay.append(modal);
+  document.body.append(overlay);
+
   try {
-    const payload = {
-      when: Date.now(),
-      listings: listings.map((l) => ({
-        ...l,
-        auctionId: l.auctionId.toString(),
-        buyPriceWei: l.buyPriceWei.toString(),
-      })),
-    };
-    localStorage.setItem(key, JSON.stringify(payload));
-  } catch {}
+    const meta = await fetchMetadata(nftContract, tokenId);
+    modal.removeChild(status);
+
+    if (meta.name) {
+      const title = el("h3", null, meta.name);
+      modal.insertBefore(title, closeBtn.nextSibling);
+    }
+
+    const mediaUrl = meta.animation || meta.image;
+    if (mediaUrl) {
+      // Guess whether to use <video> or <img>. Animation_url is typically
+      // video/audio; file extension is the other hint.
+      const lower = mediaUrl.toLowerCase();
+      const isVideo = meta.animation && (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov") || lower.includes("video"));
+      if (isVideo) {
+        const v = document.createElement("video");
+        v.src = mediaUrl;
+        v.controls = true;
+        v.autoplay = false;
+        v.loop = true;
+        v.muted = true;
+        v.className = "preview-media";
+        modal.append(v);
+      } else {
+        const img = document.createElement("img");
+        img.src = mediaUrl;
+        img.alt = meta.name || `Token #${tokenId}`;
+        img.className = "preview-media";
+        img.loading = "lazy";
+        modal.append(img);
+      }
+    } else {
+      modal.append(el("p", "muted small", "No image or media in the metadata."));
+    }
+
+    if (meta.description) {
+      modal.append(el("p", "preview-desc", meta.description));
+    }
+
+    modal.append(el("p", "muted small",
+      `${nftContract.slice(0, 6)}…${nftContract.slice(-4)} \u00b7 #${tokenId}`));
+  } catch (err) {
+    status.textContent = "Couldn't load preview: " + (err.message || String(err));
+    status.classList.remove("muted");
+    status.classList.add("warn");
+  }
 }
 
 function highlightButton(btn) {
@@ -791,7 +898,7 @@ function renderScanError(msg) {
   ui.scanPanel.hidden = false;
 }
 
-function renderScanResults(results, isCached) {
+function renderScanResults(results) {
   ui.scanPanel.replaceChildren();
 
   const header = el("div", "scan-header");
@@ -799,9 +906,6 @@ function renderScanResults(results, isCached) {
     ? "No active listings found."
     : `Found ${results.length} active listing${results.length === 1 ? "" : "s"}.`);
   header.append(h);
-  if (isCached) {
-    header.append(el("span", "muted small", " (cached — click scan again to refresh)"));
-  }
   ui.scanPanel.append(header);
 
   if (results.length === 0) {
@@ -829,7 +933,10 @@ function buildScanRow(r) {
   const row = el("div", "scan-item");
 
   const info = el("div", "scan-item-info");
-  info.append(el("div", "scan-item-title", `Token #${r.tokenId}`));
+  const titleLine = el("div", "scan-item-title");
+  titleLine.append(`Token #${r.tokenId} `);
+  titleLine.append(buildPreviewLink(r));
+  info.append(titleLine);
   info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
 
   const status = el("div", "scan-item-status");
@@ -924,7 +1031,10 @@ function buildDoneRow(r) {
   const row = el("div", "scan-item done");
 
   const info = el("div", "scan-item-info");
-  info.append(el("div", "scan-item-title", `Token #${r.tokenId}`));
+  const titleLine = el("div", "scan-item-title");
+  titleLine.append(`Token #${r.tokenId} `);
+  titleLine.append(buildPreviewLink(r));
+  info.append(titleLine);
   info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
   info.append(el("div", "scan-item-status", el("span", "ok", "\u2713 Back in your wallet")));
   row.append(info);
@@ -967,6 +1077,8 @@ function buildBurnedRow(r, txHash) {
   const info = el("div", "scan-item-info");
   info.append(el("div", "scan-item-title", `Token #${r.tokenId}`));
   info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
+  // Note: no preview link on burned rows — the token no longer exists, tokenURI
+  // would revert. Users can still see it via the tx link in the status.
   const status = el("div", "scan-item-status");
   status.append(el("span", "bad", "\uD83D\uDD25 Burned"));
   if (txHash) {

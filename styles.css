@@ -536,6 +536,58 @@ footer {
   animation: fr-pulse 1.2s ease-out infinite;
 }
 
+/* --- preview modal --- */
+
+.preview-modal {
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.preview-modal h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.preview-close {
+  align-self: flex-end;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.preview-media {
+  width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #000;
+}
+.preview-desc {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+  white-space: pre-wrap;
+}
+.preview-status.warn { color: var(--warn); }
+
+.preview-link {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.preview-link:hover {
+  background: var(--panel-2);
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
 /* --- wallet picker --- */
 
 .picker-overlay {
