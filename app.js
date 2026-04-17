@@ -739,54 +739,158 @@ async function chunkedQuery(contract, filter, from, to, label) {
 }
 
 // --- metadata preview ----------------------------------------------------
-// Resolve an ipfs:// or ar:// URI to a usable HTTPS URL. IPFS goes through a
-// public gateway; Arweave's native gateway already serves HTTPS.
-const IPFS_GATEWAY = "https://ipfs.io/ipfs/";
-function resolveMediaUri(uri) {
-  if (!uri) return null;
-  if (uri.startsWith("ipfs://")) {
-    return IPFS_GATEWAY + uri.slice("ipfs://".length).replace(/^ipfs\//, "");
-  }
-  if (uri.startsWith("ar://")) {
-    return "https://arweave.net/" + uri.slice("ar://".length);
-  }
-  if (uri.startsWith("http://")) {
-    // Refuse cleartext HTTP — our CSP blocks it anyway.
-    return null;
-  }
-  return uri; // already https: or data:
+// Resolve an ipfs:// or ar:// URI to a usable HTTPS URL. For IPFS we produce
+// an ordered list of public gateways so callers can try fallbacks — ipfs.io
+// is frequently rate-limited, and no single gateway is reliable enough on
+// its own.
+// Ordered by reliability. Cloudflare's public IPFS gateway was deprecated in
+// 2024 and is out. ipfs.io and dweb.link are the most reliable free options
+// as of writing; the rest are fallbacks. If the primary fails, buildMediaElement
+// rotates through them on <img>/<video> error events.
+const IPFS_GATEWAYS = [
+  "https://ipfs.io/ipfs/",
+  "https://dweb.link/ipfs/",
+  "https://nftstorage.link/ipfs/",
+  "https://gateway.pinata.cloud/ipfs/",
+  "https://4everland.io/ipfs/",
+];
+
+function ipfsPath(uri) {
+  // Accepts ipfs://<cid>/<path>, ipfs://ipfs/<cid>/<path>, or just <cid>/<path>.
+  if (uri.startsWith("ipfs://")) return uri.slice("ipfs://".length).replace(/^ipfs\//, "");
+  return uri;
 }
 
+// Return a list of candidate HTTPS URLs for a given URI, in order of
+// preference. For ipfs:// that's one entry per gateway; for ar:// or direct
+// HTTPS it's a single-element list.
+function candidateUrls(uri) {
+  if (!uri) return [];
+  if (uri.startsWith("ipfs://")) {
+    const path = ipfsPath(uri);
+    return IPFS_GATEWAYS.map((g) => g + path);
+  }
+  if (uri.startsWith("ar://")) {
+    return ["https://arweave.net/" + uri.slice("ar://".length)];
+  }
+  if (uri.startsWith("data:") || uri.startsWith("https:")) {
+    return [uri];
+  }
+  return []; // cleartext http or unknown scheme — blocked by CSP, skip
+}
+
+// Single-URL resolver used for the modal's primary image src. First gateway
+// is the default; <img onerror> rotates through the rest if the first fails.
+function resolveMediaUri(uri) {
+  const cands = candidateUrls(uri);
+  return cands[0] || null;
+}
+
+// In-memory cache so the same (contract, tokenId) doesn't get re-fetched
+// when the user opens preview after the row has already resolved metadata.
+const metaCache = new Map();
+
 async function fetchMetadata(nftContract, tokenId) {
+  const key = nftContract.toLowerCase() + "#" + tokenId;
+  if (metaCache.has(key)) return metaCache.get(key);
+
   const readProvider = provider || ethers.getDefaultProvider("mainnet");
   const c = new ethers.Contract(nftContract, ERC721_ABI, readProvider);
   const tokenURI = await c.tokenURI(tokenId);
-  const url = resolveMediaUri(tokenURI);
-  if (!url) throw new Error("Metadata URI uses a scheme we don't resolve (not ipfs/ar/https).");
 
   let jsonText = null;
-  // Some tokenURIs are data: URIs containing the JSON directly.
-  if (url.startsWith("data:")) {
-    const comma = url.indexOf(",");
+  const cands = candidateUrls(tokenURI);
+  if (cands.length === 0) throw new Error("Metadata URI uses a scheme we don't resolve (not ipfs/ar/https).");
+
+  if (cands[0].startsWith("data:")) {
+    const comma = cands[0].indexOf(",");
     if (comma < 0) throw new Error("Malformed data URI.");
-    const payload = url.slice(comma + 1);
-    jsonText = url.slice(5, comma).includes("base64") ? atob(payload) : decodeURIComponent(payload);
+    const payload = cands[0].slice(comma + 1);
+    jsonText = cands[0].slice(5, comma).includes("base64") ? atob(payload) : decodeURIComponent(payload);
   } else {
-    const resp = await fetch(url, { mode: "cors" });
-    if (!resp.ok) throw new Error(`Metadata fetch failed: HTTP ${resp.status}`);
-    jsonText = await resp.text();
+    // Try each gateway in turn until one succeeds.
+    let lastErr = null;
+    for (const url of cands) {
+      try {
+        const resp = await fetch(url, { mode: "cors" });
+        if (!resp.ok) { lastErr = new Error(`HTTP ${resp.status} from ${url}`); continue; }
+        jsonText = await resp.text();
+        break;
+      } catch (e) { lastErr = e; }
+    }
+    if (jsonText === null) throw lastErr || new Error("All gateways failed.");
   }
 
   let meta;
   try { meta = JSON.parse(jsonText); }
   catch { throw new Error("Metadata is not valid JSON."); }
 
-  return {
+  const result = {
     name: typeof meta.name === "string" ? meta.name : null,
     description: typeof meta.description === "string" ? meta.description : null,
+    imageUri: meta.image || meta.image_url || null,         // raw, for gateway rotation
+    animationUri: meta.animation_url || null,
     image: resolveMediaUri(meta.image) || resolveMediaUri(meta.image_url),
     animation: resolveMediaUri(meta.animation_url),
   };
+  metaCache.set(key, result);
+  return result;
+}
+
+// Build an <img> or <video> element that rotates through IPFS gateway
+// candidates on error, so a single slow/rate-limited gateway doesn't break
+// the preview.
+function buildMediaElement(uri, altText, isVideo) {
+  const cands = candidateUrls(uri);
+  if (cands.length === 0) return null;
+
+  let idx = 0;
+  const node = document.createElement(isVideo ? "video" : "img");
+  node.className = "preview-media";
+  if (isVideo) {
+    node.controls = true;
+    node.autoplay = false;
+    node.loop = true;
+    node.muted = true;
+  } else {
+    node.alt = altText || "";
+    node.loading = "lazy";
+  }
+  node.src = cands[idx];
+  node.addEventListener("error", () => {
+    idx += 1;
+    if (idx < cands.length) {
+      node.src = cands[idx];
+      return;
+    }
+    // All gateways failed — swap in a clear fallback message + direct URL.
+    const fallback = el("div", "preview-fallback");
+    fallback.append(el("p", "warn small", "Couldn't load the media from any gateway. The file may be offline or the host may be blocking us."));
+    const direct = document.createElement("a");
+    direct.href = cands[cands.length - 1];
+    direct.target = "_blank";
+    direct.rel = "noopener noreferrer";
+    direct.textContent = "Open the media URL in a new tab";
+    fallback.append(direct);
+    node.replaceWith(fallback);
+  });
+  return node;
+}
+
+// Fetch metadata asynchronously and replace the "Token #N" placeholder with
+// the artwork's real title. Caches failures (sets hasNoName) so we don't
+// retry hopeless lookups on every row rebuild. Never throws — failure is
+// silent, the placeholder just stays.
+async function lazyFillName(r, nameSpan) {
+  try {
+    const meta = await fetchMetadata(r.nftContract, r.tokenId);
+    if (meta.name) {
+      nameSpan.textContent = meta.name;
+      nameSpan.title = `Token #${r.tokenId}`;
+    }
+  } catch {
+    // Leave "Token #N" as-is.
+  }
 }
 
 function buildPreviewLink(r) {
@@ -832,29 +936,17 @@ async function openPreviewModal(nftContract, tokenId) {
       modal.insertBefore(title, closeBtn.nextSibling);
     }
 
-    const mediaUrl = meta.animation || meta.image;
-    if (mediaUrl) {
-      // Guess whether to use <video> or <img>. Animation_url is typically
-      // video/audio; file extension is the other hint.
-      const lower = mediaUrl.toLowerCase();
-      const isVideo = meta.animation && (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov") || lower.includes("video"));
-      if (isVideo) {
-        const v = document.createElement("video");
-        v.src = mediaUrl;
-        v.controls = true;
-        v.autoplay = false;
-        v.loop = true;
-        v.muted = true;
-        v.className = "preview-media";
-        modal.append(v);
-      } else {
-        const img = document.createElement("img");
-        img.src = mediaUrl;
-        img.alt = meta.name || `Token #${tokenId}`;
-        img.className = "preview-media";
-        img.loading = "lazy";
-        modal.append(img);
-      }
+    // Prefer animation_url (videos/gifs-as-mp4), fall back to image. Use raw
+    // URIs so buildMediaElement can rotate through IPFS gateways on failure.
+    const mediaUri = meta.animationUri || meta.imageUri;
+    if (mediaUri) {
+      const lower = (mediaUri || "").toLowerCase();
+      const isVideo = !!meta.animationUri && (
+        lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov") || lower.includes("video")
+      );
+      const node = buildMediaElement(mediaUri, meta.name || `Token #${tokenId}`, isVideo);
+      if (node) modal.append(node);
+      else modal.append(el("p", "muted small", "Media URL couldn't be resolved."));
     } else {
       modal.append(el("p", "muted small", "No image or media in the metadata."));
     }
@@ -934,10 +1026,13 @@ function buildScanRow(r) {
 
   const info = el("div", "scan-item-info");
   const titleLine = el("div", "scan-item-title");
-  titleLine.append(`Token #${r.tokenId} `);
-  titleLine.append(buildPreviewLink(r));
+  const nameSpan = el("span", "scan-item-name", `Token #${r.tokenId}`);
+  titleLine.append(nameSpan, " ", buildPreviewLink(r));
   info.append(titleLine);
   info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
+  // Lazy-load the artwork name from metadata so the user sees the piece's
+  // real title, not just the token number.
+  lazyFillName(r, nameSpan);
 
   const status = el("div", "scan-item-status");
   if (r.hasAuction && r.hasBuyPrice) {
@@ -1032,12 +1127,13 @@ function buildDoneRow(r) {
 
   const info = el("div", "scan-item-info");
   const titleLine = el("div", "scan-item-title");
-  titleLine.append(`Token #${r.tokenId} `);
-  titleLine.append(buildPreviewLink(r));
+  const nameSpan = el("span", "scan-item-name", `Token #${r.tokenId}`);
+  titleLine.append(nameSpan, " ", buildPreviewLink(r));
   info.append(titleLine);
   info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
   info.append(el("div", "scan-item-status", el("span", "ok", "\u2713 Back in your wallet")));
   row.append(info);
+  lazyFillName(r, nameSpan);
 
   const actions = el("div", "scan-item-actions");
   const burnBtn = el("button", "btn scan-item-btn burn-btn");
