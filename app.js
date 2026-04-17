@@ -774,65 +774,176 @@ function renderScanResults(results, isCached) {
     return;
   }
 
+  const help = el("p", "muted small",
+    "Each listing below can be cancelled right here \u2014 no need to scroll. Click the button, approve in your wallet, and the piece comes back to you.");
+  ui.scanPanel.append(help);
+
   const list = el("div", "scan-list");
   for (const r of results) {
-    const row = el("div", "scan-item");
-
-    const info = el("div", "scan-item-info");
-    const title = el("div", "scan-item-title", `Token #${r.tokenId}`);
-    info.append(title);
-    const sub = el("div", "scan-item-sub");
-    sub.append(r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4));
-    info.append(sub);
-
-    const status = el("div", "scan-item-status");
-    if (r.hasAuction && r.hasBuyPrice) {
-      status.append(el("span", "ok", `${fmtEth(r.buyPriceWei)} ETH + auction`));
-    } else if (r.hasBuyPrice) {
-      status.append(el("span", "ok", `Listed for ${fmtEth(r.buyPriceWei)} ETH`));
-    } else if (r.hasAuction && r.auctionHasBid) {
-      status.append(el("span", "bad", "Auction (has bid, locked)"));
-    } else if (r.hasAuction) {
-      status.append(el("span", "ok", "Auction, no bids"));
-    }
-    info.append(status);
-
-    const action = el("button", "btn scan-item-btn");
-    action.type = "button";
-    // Label the button with what it will do — more useful than "Open".
-    if (r.hasAuction && !r.auctionHasBid) {
-      action.textContent = "Cancel this auction";
-    } else if (r.hasAuction && r.auctionHasBid) {
-      action.textContent = "Locked (has bid)";
-      action.disabled = true;
-    } else if (r.hasBuyPrice) {
-      action.textContent = "Remove this price";
-    }
-    action.addEventListener("click", async () => {
-      // Fill the manual fields so the rest of the flow knows what piece we're on.
-      ui.nftUrl.value = "";
-      ui.nftContract.value = r.nftContract;
-      ui.tokenId.value = r.tokenId;
-      await lookupState();
-
-      // Pick the right button for this listing and take the user straight to it.
-      // When both auction and buy price exist, prefer the auction (more urgent
-      // if bids could land on it — once bidden, it locks).
-      let target = null;
-      if (r.hasAuction && !r.auctionHasBid) target = ui.cancelAuction;
-      else if (r.hasBuyPrice) target = ui.cancelBuy;
-
-      if (target) {
-        target.scrollIntoView({ behavior: "smooth", block: "center" });
-        highlightButton(target);
-      }
-    });
-
-    row.append(info, action);
-    list.append(row);
+    list.append(buildScanRow(r));
   }
   ui.scanPanel.append(list);
   ui.scanPanel.hidden = false;
+}
+
+function buildScanRow(r) {
+  const row = el("div", "scan-item");
+
+  const info = el("div", "scan-item-info");
+  info.append(el("div", "scan-item-title", `Token #${r.tokenId}`));
+  info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
+
+  const status = el("div", "scan-item-status");
+  if (r.hasAuction && r.hasBuyPrice) {
+    status.append(el("span", "ok", `${fmtEth(r.buyPriceWei)} ETH + auction`));
+  } else if (r.hasBuyPrice) {
+    status.append(el("span", "ok", `Listed for ${fmtEth(r.buyPriceWei)} ETH`));
+  } else if (r.hasAuction && r.auctionHasBid) {
+    status.append(el("span", "bad", "Auction (has bid, locked)"));
+  } else if (r.hasAuction) {
+    status.append(el("span", "ok", "Auction, no bids"));
+  }
+  info.append(status);
+
+  const actions = el("div", "scan-item-actions");
+
+  // One button per cancellable listing. If a piece has both an auction and a
+  // buy price, both buttons appear — each click is its own transaction.
+  if (r.hasAuction) {
+    const btn = el("button", "btn scan-item-btn");
+    btn.type = "button";
+    if (r.auctionHasBid) {
+      btn.textContent = "Locked (has bid)";
+      btn.disabled = true;
+    } else {
+      btn.textContent = "End auction";
+      btn.addEventListener("click", () => rowCancelAuction(r, row, btn));
+    }
+    actions.append(btn);
+  }
+
+  if (r.hasBuyPrice) {
+    const btn = el("button", "btn scan-item-btn");
+    btn.type = "button";
+    btn.textContent = "Remove price";
+    btn.addEventListener("click", () => rowCancelBuyPrice(r, row, btn));
+    actions.append(btn);
+  }
+
+  row.append(info, actions);
+  return row;
+}
+
+// Inline per-row cancellation — runs the contract call directly without
+// routing through step 2. Makes bulk cleanup practical for artists with
+// many listings.
+
+async function rowCancelAuction(r, rowEl, btn) {
+  if (!signer) { log("Connect your wallet first."); return; }
+  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+
+  setRowBusy(rowEl, "Confirm in your wallet\u2026");
+  try {
+    const market = new ethers.Contract(MARKET, MARKET_ABI, signer);
+    log(`Ending auction for token #${r.tokenId} \u2014 confirm in your wallet\u2026`);
+    const tx = await market.cancelReserveAuction(r.auctionId);
+    setRowBusy(rowEl, "Mining\u2026 waiting for confirmation");
+    log("Transaction submitted.", { link: txLink(tx.hash) });
+    await tx.wait();
+    log("\u2713 Auction ended.", { link: txLink(tx.hash) });
+    await rerenderRowAfterCancel(r, rowEl);
+  } catch (err) {
+    log(`Couldn't end the auction: ${explainRevert(err)}`);
+    clearRowBusy(rowEl);
+  }
+}
+
+async function rowCancelBuyPrice(r, rowEl, btn) {
+  if (!signer) { log("Connect your wallet first."); return; }
+  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+
+  setRowBusy(rowEl, "Confirm in your wallet\u2026");
+  try {
+    const market = new ethers.Contract(MARKET, MARKET_ABI, signer);
+    log(`Removing buy-now price for token #${r.tokenId} \u2014 confirm in your wallet\u2026`);
+    const tx = await market.cancelBuyPrice(r.nftContract, r.tokenId);
+    setRowBusy(rowEl, "Mining\u2026 waiting for confirmation");
+    log("Transaction submitted.", { link: txLink(tx.hash) });
+    await tx.wait();
+    log("\u2713 Price removed.", { link: txLink(tx.hash) });
+    await rerenderRowAfterCancel(r, rowEl);
+  } catch (err) {
+    log(`Couldn't remove the price: ${explainRevert(err)}`);
+    clearRowBusy(rowEl);
+  }
+}
+
+function setRowBusy(rowEl, text) {
+  rowEl.classList.add("busy");
+  // Disable all buttons in the row while a tx is in flight.
+  rowEl.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+  // Show a status chip next to the title.
+  let chip = rowEl.querySelector(".scan-item-chip");
+  if (!chip) {
+    chip = el("span", "scan-item-chip");
+    rowEl.querySelector(".scan-item-title")?.append(" ", chip);
+  }
+  chip.textContent = text;
+}
+
+function clearRowBusy(rowEl) {
+  rowEl.classList.remove("busy");
+  rowEl.querySelectorAll("button").forEach((b) => { if (!b.dataset.permanent) b.disabled = false; });
+  rowEl.querySelector(".scan-item-chip")?.remove();
+}
+
+// Re-check the piece's listing state and re-render the row. If nothing is
+// left to cancel, mark the row done. Otherwise show what remains.
+async function rerenderRowAfterCancel(r, rowEl) {
+  try {
+    const market = new ethers.Contract(MARKET, MARKET_ABI, provider);
+    const [auctionId, bp] = await Promise.all([
+      market.getReserveAuctionIdFor(r.nftContract, r.tokenId).catch(() => 0n),
+      market.getBuyPrice(r.nftContract, r.tokenId).catch(() => [ethers.ZeroAddress, 0n]),
+    ]);
+    const userLower = account.toLowerCase();
+    const hasBuyPrice = bp[0] !== ethers.ZeroAddress && bp[0].toLowerCase() === userLower;
+    let hasAuction = auctionId > 0n;
+    let auction = null;
+    if (hasAuction) {
+      try { auction = await market.getReserveAuction(auctionId); } catch {}
+      if (!auction || auction.seller.toLowerCase() !== userLower) {
+        hasAuction = false; auction = null;
+      }
+    }
+
+    if (!hasAuction && !hasBuyPrice) {
+      // All done for this piece. Replace the row with a "done" marker.
+      const doneRow = el("div", "scan-item done");
+      const info = el("div", "scan-item-info");
+      info.append(el("div", "scan-item-title", `Token #${r.tokenId}`));
+      info.append(el("div", "scan-item-sub", r.nftContract.slice(0, 6) + "…" + r.nftContract.slice(-4)));
+      info.append(el("div", "scan-item-status", el("span", "ok", "\u2713 Back in your wallet")));
+      doneRow.append(info);
+      rowEl.replaceWith(doneRow);
+    } else {
+      // Piece still has one listing left (e.g., auction cancelled, buy price remains).
+      // Rebuild with updated state.
+      const updated = {
+        ...r,
+        hasAuction,
+        auctionId,
+        auctionHasBid: auction && auction.endTime > 0n,
+        hasBuyPrice,
+        buyPriceWei: bp[1],
+      };
+      const newRow = buildScanRow(updated);
+      rowEl.replaceWith(newRow);
+    }
+  } catch (err) {
+    log(`Couldn't refresh row state: ${explainRevert(err)}`);
+    clearRowBusy(rowEl);
+  }
 }
 
 // --- write actions --------------------------------------------------------

@@ -177,7 +177,7 @@ small.muted { font-size: 12px; }
 }
 .btn:hover:not(:disabled) { background: #2e3445; border-color: #3a4154; }
 .btn:active:not(:disabled) { transform: translateY(1px); }
-.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:disabled { opacity: 0.4; cursor: default; }
 
 .btn.primary {
   background: var(--accent);
@@ -473,6 +473,36 @@ footer {
   flex-shrink: 0;
   padding: 8px 14px;
   font-size: 13px;
+}
+
+.scan-item-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.scan-item-chip {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+.scan-item.busy {
+  opacity: 0.75;
+}
+
+.scan-item.done {
+  background: rgba(107, 212, 165, 0.06);
+  border-color: rgba(107, 212, 165, 0.3);
 }
 
 /* --- wallet picker --- */
