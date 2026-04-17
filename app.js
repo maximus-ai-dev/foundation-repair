@@ -191,13 +191,119 @@ function explainRevert(err) {
 
 // --- wallet ---------------------------------------------------------------
 
+// EIP-6963: Multi-wallet discovery. Each injected wallet announces itself via a
+// CustomEvent. We collect announcements and let the user pick the one they want
+// instead of being stuck with whatever hijacked window.ethereum last.
+
+const discoveredWallets = new Map();  // rdns -> { info, provider }
+
+window.addEventListener("eip6963:announceProvider", (event) => {
+  const detail = event.detail;
+  if (!detail?.info?.rdns || !detail?.provider) return;
+  discoveredWallets.set(detail.info.rdns, detail);
+});
+
+// Ask all injected wallets to announce themselves.
+window.dispatchEvent(new Event("eip6963:requestProvider"));
+
+// Request again shortly after load in case a wallet injects late.
+setTimeout(() => {
+  window.dispatchEvent(new Event("eip6963:requestProvider"));
+}, 500);
+
 async function connect() {
-  if (!window.ethereum) {
-    log("No wallet detected. Install MetaMask (metamask.io) or another browser wallet and reload this page.");
-    return;
+  // Re-poll to catch any late-injected wallets.
+  window.dispatchEvent(new Event("eip6963:requestProvider"));
+  await new Promise(r => setTimeout(r, 50));
+
+  const wallets = Array.from(discoveredWallets.values());
+
+  // No EIP-6963 wallets found. Fall back to window.ethereum (legacy).
+  if (wallets.length === 0) {
+    if (!window.ethereum) {
+      log("No wallet detected. Install MetaMask (metamask.io) or another browser wallet extension, then reload this page.");
+      return;
+    }
+    return connectWith({ info: { name: "wallet", rdns: "legacy" }, provider: window.ethereum });
   }
+
+  // Exactly one wallet — just use it.
+  if (wallets.length === 1) {
+    return connectWith(wallets[0]);
+  }
+
+  // Multiple wallets — let the user pick.
+  showWalletPicker(wallets);
+}
+
+function showWalletPicker(wallets) {
+  // Remove any existing picker.
+  document.getElementById("wallet-picker")?.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "wallet-picker";
+  overlay.className = "picker-overlay";
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  const modal = document.createElement("div");
+  modal.className = "picker-modal";
+
+  const title = document.createElement("h3");
+  title.textContent = "Choose a wallet";
+  modal.append(title);
+
+  const note = document.createElement("p");
+  note.className = "muted small";
+  note.textContent = "You have multiple wallets installed. Pick the one you used on Foundation.";
+  modal.append(note);
+
+  const list = document.createElement("div");
+  list.className = "picker-list";
+
+  for (const w of wallets) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "picker-item";
+
+    if (w.info.icon) {
+      const img = document.createElement("img");
+      img.src = w.info.icon;      // data: URIs per EIP-6963 spec
+      img.alt = "";
+      img.width = 28;
+      img.height = 28;
+      btn.append(img);
+    }
+
+    const label = document.createElement("span");
+    label.textContent = w.info.name || "Unknown wallet";
+    btn.append(label);
+
+    btn.addEventListener("click", () => {
+      overlay.remove();
+      connectWith(w);
+    });
+
+    list.append(btn);
+  }
+  modal.append(list);
+
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "btn";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => overlay.remove());
+  modal.append(cancel);
+
+  overlay.append(modal);
+  document.body.append(overlay);
+}
+
+async function connectWith(wallet) {
   try {
-    provider = new ethers.BrowserProvider(window.ethereum, "any");
+    const eip1193 = wallet.provider;
+    provider = new ethers.BrowserProvider(eip1193, "any");
     await provider.send("eth_requestAccounts", []);
     signer = await provider.getSigner();
     account = await signer.getAddress();
@@ -207,16 +313,22 @@ async function connect() {
     const onMainnet = chainId === MAINNET_CHAIN_ID;
     ui.walletStatus.textContent = onMainnet ? "Connected" : "Connected (wrong network)";
     ui.walletDetail.replaceChildren();
+    const walletName = wallet.info?.name;
+    if (walletName && walletName !== "wallet") {
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = walletName + " \u00b7 ";
+      ui.walletDetail.append(nameSpan);
+    }
     const netSpan = document.createElement("span");
     netSpan.className = onMainnet ? "ok" : "bad";
     netSpan.textContent = onMainnet ? "Ethereum mainnet" : "chain " + chainId;
     ui.walletDetail.append(netSpan, " \u00b7 " + shortAddr(account));
     ui.connectBtn.textContent = "Reconnect";
-    log(`Connected as ${shortAddr(account)} on ${onMainnet ? "Ethereum mainnet" : "chain " + chainId}.`);
-    if (!onMainnet) log("⚠ Switch to Ethereum mainnet in your wallet before cancelling anything.");
+    log(`Connected to ${walletName || "wallet"} as ${shortAddr(account)} on ${onMainnet ? "Ethereum mainnet" : "chain " + chainId}.`);
+    if (!onMainnet) log("\u26A0 Switch to Ethereum mainnet in your wallet before cancelling anything.");
 
-    window.ethereum.on?.("accountsChanged", () => location.reload());
-    window.ethereum.on?.("chainChanged",    () => location.reload());
+    eip1193.on?.("accountsChanged", () => location.reload());
+    eip1193.on?.("chainChanged",    () => location.reload());
   } catch (err) {
     log(`Connection failed: ${explainRevert(err)}`);
   }
