@@ -123,28 +123,25 @@
   </section>
 
   <section class="card danger-card">
-    <h2><span class="step-no">2</span> Burn it (optional)</h2>
+    <h2><span class="step-no">2</span> Burn Foundation-minted pieces (optional)</h2>
     <p class="muted small">
-      Once the NFT is back in your wallet, you can permanently destroy the version
-      that lives on Foundation's shared contract. The most common reason to do
-      this is so you can <strong>remint the piece on your own sovereign contract</strong>
+      Burning permanently destroys a token on Foundation's contract. The usual
+      reason is to <strong>remint the piece on your own sovereign contract</strong>
       — for example, on <a href="https://manifold.xyz" target="_blank" rel="noopener noreferrer">Manifold</a>
       or a custom contract you deploy yourself — so the work isn't tied to a
-      marketplace's infrastructure anymore. If you don't want to remint, there's
-      no reason to burn; step 2 is enough.
+      marketplace's infrastructure anymore. If you don't plan to remint, there's
+      no reason to burn.
     </p>
     <p class="warn small">
       Burning is <strong>irreversible</strong>. Only do this if you have a plan
       for reminting on a contract you control.
     </p>
-    <div class="row">
-      <label class="check">
-        <input id="burn-ack" type="checkbox" />
-        <span>I understand this permanently destroys the token.</span>
-      </label>
-    </div>
-    <div class="row">
-      <button id="burn-btn" class="btn danger" type="button" disabled>Burn this NFT forever</button>
+    <div id="burn-candidates-panel" class="burn-candidates">
+      <p class="muted small burn-empty">
+        Click <strong>Find all my listings</strong> above to populate this list.
+        We'll show every Foundation-minted piece you currently own so you can
+        burn just the ones you want to remint elsewhere.
+      </p>
     </div>
   </section>
 

@@ -536,6 +536,19 @@ footer {
   animation: fr-pulse 1.2s ease-out infinite;
 }
 
+/* --- burn candidates panel --- */
+
+.burn-candidates {
+  margin-top: 16px;
+}
+.burn-candidates .burn-empty {
+  padding: 14px 16px;
+  background: var(--bg-soft);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  margin: 0;
+}
+
 /* --- chain switcher button (inside wallet bar) --- */
 
 .chain-switch {
