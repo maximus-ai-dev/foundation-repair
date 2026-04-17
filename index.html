@@ -122,50 +122,8 @@
     <div id="scan-panel" class="scan-panel" hidden></div>
   </section>
 
-  <section class="card">
-    <h2><span class="step-no">2</span> Bring your artwork home</h2>
-    <p class="muted small">
-      If your piece is listed (auction or fixed price), Foundation is holding it
-      in escrow. Cancelling the listing releases it back to your wallet.
-      Nothing is sold, nothing is moved to anyone else — it just comes home.
-    </p>
-
-    <div class="action-card">
-      <div class="action-head">
-        <strong>End the auction</strong>
-        <span id="auction-hint" class="muted small">Lookup to see status</span>
-      </div>
-      <p class="muted small">
-        Only works if nobody has bid yet. If someone's placed a bid, the auction
-        is locked in and can't be cancelled — that's a rule enforced by the
-        contract itself, not by this tool.
-      </p>
-      <div class="row">
-        <label class="grow">
-          <span class="muted small">Auction ID (filled in for you after lookup)</span>
-          <input id="auction-id" type="text" inputmode="numeric" placeholder="auctionId" autocomplete="off" spellcheck="false" />
-        </label>
-        <button id="cancel-auction-btn" class="btn" type="button" disabled>End auction &amp; return NFT</button>
-      </div>
-    </div>
-
-    <div class="action-card">
-      <div class="action-head">
-        <strong>Remove the buy-now price</strong>
-        <span id="buyprice-hint" class="muted small">Lookup to see status</span>
-      </div>
-      <p class="muted small">
-        Delists the piece at a fixed price. The NFT returns to your wallet unless
-        it's also set up as an auction — in which case cancel both.
-      </p>
-      <div class="row">
-        <button id="cancel-buyprice-btn" class="btn" type="button" disabled>Remove price &amp; return NFT</button>
-      </div>
-    </div>
-  </section>
-
   <section class="card danger-card">
-    <h2><span class="step-no">3</span> Burn it (optional)</h2>
+    <h2><span class="step-no">2</span> Burn it (optional)</h2>
     <p class="muted small">
       Once the NFT is back in your wallet, you can permanently destroy the version
       that lives on Foundation's shared contract. The most common reason to do

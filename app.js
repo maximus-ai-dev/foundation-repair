@@ -46,13 +46,8 @@ const ui = {
   scanBtn:       $("scan-btn"),
   statePanel:    $("state-panel"),
   scanPanel:     $("scan-panel"),
-  auctionId:     $("auction-id"),
-  cancelAuction: $("cancel-auction-btn"),
-  cancelBuy:     $("cancel-buyprice-btn"),
   burnBtn:       $("burn-btn"),
   burnAck:       $("burn-ack"),
-  auctionHint:   $("auction-hint"),
-  buypriceHint:  $("buyprice-hint"),
   logItems:      $("log-items"),
 };
 
@@ -439,8 +434,6 @@ async function lookupState() {
     };
 
     renderState(lastLookup);
-    if (auctionId > 0n) ui.auctionId.value = auctionId.toString();
-    refreshButtons();
   } catch (err) {
     log(`Lookup failed: ${explainRevert(err)}`);
   }
@@ -538,28 +531,74 @@ function renderState(s) {
     stateRow("Auction", auctionText, hasAuction ? (auctionHasBid ? "bad" : "ok") : "muted"),
     stateRow("Buy-now price", buyText, hasBuyPrice ? "ok" : "muted"),
   );
-  ui.statePanel.hidden = false;
 
-  ui.auctionHint.textContent = hasAuction
-    ? (auctionHasBid ? "locked \u2014 has a bid" : `auction #${s.auctionId}, ready`)
-    : "no auction on this piece";
-  ui.buypriceHint.textContent = hasBuyPrice
-    ? `listed at ${fmtEth(s.buyPriceWei)} ETH`
-    : "no buy-now price set";
+  // Inline cancel buttons: attached directly to the state panel when the
+  // connected wallet is the current seller. This replaces the old separate
+  // "Bring your artwork home" section, which was confusing when empty.
+  if (isAuctionSeller || isBuyPriceSeller) {
+    const actions = el("div", "state-actions");
+    if (isAuctionSeller && !auctionHasBid) {
+      const btn = el("button", "btn warn-btn");
+      btn.type = "button";
+      btn.textContent = "End auction & return NFT";
+      btn.addEventListener("click", () => statePanelCancelAuction(s, btn));
+      actions.append(btn);
+    }
+    if (isBuyPriceSeller) {
+      const btn = el("button", "btn warn-btn");
+      btn.type = "button";
+      btn.textContent = "Remove price & return NFT";
+      btn.addEventListener("click", () => statePanelCancelBuyPrice(s, btn));
+      actions.append(btn);
+    }
+    ui.statePanel.append(actions);
+  }
+
+  ui.statePanel.hidden = false;
 }
 
-function refreshButtons() {
-  const s = lastLookup;
-  if (!s) return;
-  const auctionHasBid = s.auction && s.auction.endTime > 0n;
-  const userLower = account?.toLowerCase() || null;
-  // Only enable cancel if the connected wallet is the current seller of the
-  // listing. Otherwise the contract will revert ("not seller") — better to
-  // keep the button off than let the user spend gas on a guaranteed failure.
-  const isAuctionSeller  = !!userLower && s.auction && s.auction.seller?.toLowerCase() === userLower;
-  const isBuyPriceSeller = !!userLower && s.buyPriceSeller && s.buyPriceSeller !== ethers.ZeroAddress && s.buyPriceSeller.toLowerCase() === userLower;
-  ui.cancelAuction.disabled = !(s.auctionId > 0n) || auctionHasBid || !isAuctionSeller;
-  ui.cancelBuy.disabled     = s.buyPriceSeller === ethers.ZeroAddress || !isBuyPriceSeller;
+async function statePanelCancelAuction(s, btn) {
+  if (!signer) { log("Connect your wallet first."); return; }
+  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Confirm in your wallet\u2026";
+  try {
+    const market = new ethers.Contract(MARKET, MARKET_ABI, signer);
+    log(`Ending auction for token #${s.tokenId} \u2014 confirm in your wallet\u2026`);
+    const tx = await market.cancelReserveAuction(s.auctionId);
+    btn.textContent = "Mining\u2026";
+    log("Transaction submitted.", { link: txLink(tx.hash) });
+    await tx.wait();
+    log("\u2713 Auction ended.", { link: txLink(tx.hash) });
+    await lookupState(); // refresh the state panel
+  } catch (err) {
+    log(`Couldn't end the auction: ${explainRevert(err)}`);
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+}
+
+async function statePanelCancelBuyPrice(s, btn) {
+  if (!signer) { log("Connect your wallet first."); return; }
+  if (chainId !== MAINNET_CHAIN_ID) { log("Switch to Ethereum mainnet first."); return; }
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Confirm in your wallet\u2026";
+  try {
+    const market = new ethers.Contract(MARKET, MARKET_ABI, signer);
+    log(`Removing buy-now price for token #${s.tokenId} \u2014 confirm in your wallet\u2026`);
+    const tx = await market.cancelBuyPrice(s.nftContract, s.tokenId);
+    btn.textContent = "Mining\u2026";
+    log("Transaction submitted.", { link: txLink(tx.hash) });
+    await tx.wait();
+    log("\u2713 Price removed.", { link: txLink(tx.hash) });
+    await lookupState();
+  } catch (err) {
+    log(`Couldn't remove the price: ${explainRevert(err)}`);
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
 }
 
 // --- listings scanner -----------------------------------------------------
@@ -948,40 +987,6 @@ async function rerenderRowAfterCancel(r, rowEl) {
 
 // --- write actions --------------------------------------------------------
 
-async function cancelAuction() {
-  try {
-    requireWallet();
-    const idStr = ui.auctionId.value.trim();
-    if (!/^\d+$/.test(idStr)) throw new Error("Auction ID should be a whole number. Click \"Check this artwork\" and it'll fill in for you.");
-    const auctionId = BigInt(idStr);
-    const market = new ethers.Contract(MARKET, MARKET_ABI, signer);
-    log(`Ending auction #${auctionId} — confirm the transaction in your wallet…`);
-    const tx = await market.cancelReserveAuction(auctionId);
-    log("Transaction submitted.", { link: txLink(tx.hash) });
-    await tx.wait();
-    log("✓ Auction ended. Your NFT should now be back in your wallet (unless it's also listed with a buy-now price).", { link: txLink(tx.hash) });
-    await lookupState();
-  } catch (err) {
-    log(`Couldn't end the auction: ${explainRevert(err)}`);
-  }
-}
-
-async function cancelBuyPrice() {
-  try {
-    requireWallet();
-    const { nft, tokenId } = parseInputs();
-    const market = new ethers.Contract(MARKET, MARKET_ABI, signer);
-    log(`Removing buy-now price for ${shortAddr(nft)} #${tokenId} — confirm in your wallet…`);
-    const tx = await market.cancelBuyPrice(nft, tokenId);
-    log("Transaction submitted.", { link: txLink(tx.hash) });
-    await tx.wait();
-    log("✓ Price removed. Your NFT is back in your wallet (unless it's also escrowed for an auction).", { link: txLink(tx.hash) });
-    await lookupState();
-  } catch (err) {
-    log(`Couldn't remove the price: ${explainRevert(err)}`);
-  }
-}
-
 async function burnToken() {
   try {
     requireWallet();
@@ -1044,8 +1049,6 @@ ui.connectBtn.addEventListener("click", () => {
 });
 ui.loadBtn.addEventListener("click", lookupState);
 ui.scanBtn.addEventListener("click", findMyListings);
-ui.cancelAuction.addEventListener("click", cancelAuction);
-ui.cancelBuy.addEventListener("click", cancelBuyPrice);
 ui.burnBtn.addEventListener("click", burnToken);
 ui.burnAck.addEventListener("change", () => { ui.burnBtn.disabled = !ui.burnAck.checked; });
 

@@ -260,6 +260,15 @@ small.muted { font-size: 12px; }
 .state .v.muted { color: var(--muted); }
 .state code { background: transparent; border: none; padding: 0; color: var(--text); font-size: 13px; }
 
+.state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
 /* --- advanced details --- */
 
 details.advanced {
