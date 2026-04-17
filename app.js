@@ -376,9 +376,22 @@ async function connectWith(wallet) {
       nameSpan.textContent = walletName + " \u00b7 ";
       ui.walletDetail.append(nameSpan);
     }
-    const netSpan = document.createElement("span");
-    netSpan.className = supported ? "ok" : "bad";
+    // The chain label is also the chain-switcher. Clicking it opens the
+    // picker so the user can hop between supported chains without leaving
+    // this tool.
+    const netSpan = document.createElement("button");
+    netSpan.type = "button";
+    netSpan.className = "chain-switch " + (supported ? "ok" : "bad");
     netSpan.textContent = supported ? chainInfo.name : friendlyChainName(chainId);
+    netSpan.title = "Click to switch network";
+    netSpan.addEventListener("click", () => {
+      const otherChains = Object.values(CHAINS).filter((c) => c.hex !== chainInfo?.hex);
+      if (otherChains.length === 1) {
+        switchToChain(otherChains[0]);
+      } else if (otherChains.length > 1) {
+        showChainPicker(otherChains);
+      }
+    });
     ui.walletDetail.append(netSpan, " \u00b7 " + shortAddr(account));
 
     // Toggle the connect button: normal "Reconnect", or a prominent "Switch
@@ -431,14 +444,14 @@ function friendlyChainName(id) {
 }
 
 // When the user is on an unsupported chain, show a picker listing every
-// chain we support so they can pick one. If only one chain is supported,
+// supported chain so they can pick one. If only one chain is supported,
 // switch straight to it without a picker.
 function switchToMainnet() {
-  const supportedChains = Object.entries(CHAINS);
+  const supportedChains = Object.values(CHAINS);
   if (supportedChains.length === 1) {
-    return switchToChain(supportedChains[0][1]);
+    return switchToChain(supportedChains[0]);
   }
-  showChainPicker(supportedChains.map(([, c]) => c));
+  showChainPicker(supportedChains);
 }
 
 async function switchToChain(chainInfo) {
