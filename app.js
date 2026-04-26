@@ -405,7 +405,11 @@ async function connectWith(wallet) {
       connectBtnMode = "switch";
     }
 
-    // Enable the listings scanner now that we have an address + provider.
+    // Enable the lookup + listings scanner now that we have an address +
+    // provider. (Lookups deliberately don't fall back to ethers'
+    // getDefaultProvider, so they're gated on the wallet.)
+    ui.loadBtn.disabled = !provider;
+    ui.loadBtn.title = provider ? "" : "Connect your wallet to enable this";
     ui.scanBtn.disabled = !supported;
     ui.scanBtn.title = supported ? "" : "Switch to a supported network first";
 
@@ -533,11 +537,14 @@ function showChainPicker(chains) {
 
 async function lookupState() {
   try {
+    if (!provider) {
+      log("Connect your wallet first — lookups use your wallet's RPC so nothing leaves your machine through third-party services.");
+      return;
+    }
     const { nft, tokenId, assumedShared } = parseInputs();
 
-    const readProvider = provider || ethers.getDefaultProvider("mainnet");
-    const market = new ethers.Contract(currentMarket(), MARKET_ABI, readProvider);
-    const nftC   = new ethers.Contract(nft,    ERC721_ABI,  readProvider);
+    const market = new ethers.Contract(currentMarket(), MARKET_ABI, provider);
+    const nftC   = new ethers.Contract(nft,    ERC721_ABI,  provider);
 
     log(`Looking up ${shortAddr(nft)} #${tokenId}…`);
 
@@ -906,12 +913,26 @@ function resolveMediaUri(uri) {
 // when the user opens preview after the row has already resolved metadata.
 const metaCache = new Map();
 
+// Concatenate Uint8Array chunks into a single Uint8Array. Used by the bounded
+// metadata fetcher so we can decode a streamed body without exceeding the size cap.
+function concatChunks(chunks) {
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
 async function fetchMetadata(nftContract, tokenId) {
   const key = nftContract.toLowerCase() + "#" + tokenId;
   if (metaCache.has(key)) return metaCache.get(key);
 
-  const readProvider = provider || ethers.getDefaultProvider("mainnet");
-  const c = new ethers.Contract(nftContract, ERC721_ABI, readProvider);
+  // Require a connected wallet. We deliberately don't fall back to ethers'
+  // default provider, which would silently fan out RPC calls to third-party
+  // services (Etherscan, Ankr, Cloudflare) without the user's consent.
+  if (!provider) throw new Error("Connect your wallet first.");
+  const c = new ethers.Contract(nftContract, ERC721_ABI, provider);
   const tokenURI = await c.tokenURI(tokenId);
 
   let jsonText = null;
@@ -924,15 +945,48 @@ async function fetchMetadata(nftContract, tokenId) {
     const payload = cands[0].slice(comma + 1);
     jsonText = cands[0].slice(5, comma).includes("base64") ? atob(payload) : decodeURIComponent(payload);
   } else {
-    // Try each gateway in turn until one succeeds.
+    // Try each gateway in turn until one succeeds. Each fetch is hard-bounded:
+    // 10s timeout via AbortController, and 1 MB max body so a hostile metadata
+    // host can't stream gigabytes and OOM the tab. Real NFT metadata is
+    // typically <5 KB; 1 MB is comfortably above any legitimate ceiling.
+    const FETCH_TIMEOUT_MS = 10_000;
+    const MAX_BYTES = 1_048_576;
     let lastErr = null;
     for (const url of cands) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
       try {
-        const resp = await fetch(url, { mode: "cors" });
+        const resp = await fetch(url, { mode: "cors", signal: ctrl.signal });
         if (!resp.ok) { lastErr = new Error(`HTTP ${resp.status} from ${url}`); continue; }
-        jsonText = await resp.text();
+        // Stream the body so we can stop early if it exceeds MAX_BYTES.
+        const reader = resp.body?.getReader();
+        if (!reader) { lastErr = new Error("Response had no body"); continue; }
+        const chunks = [];
+        let received = 0;
+        let truncated = false;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          received += value.length;
+          if (received > MAX_BYTES) {
+            ctrl.abort();
+            truncated = true;
+            break;
+          }
+          chunks.push(value);
+        }
+        if (truncated) { lastErr = new Error("Metadata response too large"); continue; }
+        jsonText = new TextDecoder().decode(concatChunks(chunks));
         break;
-      } catch (e) { lastErr = e; }
+      } catch (e) {
+        if (e?.name === "AbortError") {
+          lastErr = new Error(`Metadata fetch timed out at ${url}`);
+        } else {
+          lastErr = e;
+        }
+      } finally {
+        clearTimeout(timer);
+      }
     }
     if (jsonText === null) throw lastErr || new Error("All gateways failed.");
   }
@@ -979,15 +1033,24 @@ function buildMediaElement(uri, altText, isVideo) {
       node.src = cands[idx];
       return;
     }
-    // All gateways failed — swap in a clear fallback message + direct URL.
+    // All gateways failed — show a fallback message. Only render a clickable
+    // "open" link if the URL is from one of OUR known IPFS / Arweave gateways.
+    // We never want to send users from this page to an arbitrary metadata-
+    // supplied HTTPS URL (phishing vector).
     const fallback = el("div", "preview-fallback");
     fallback.append(el("p", "warn small", "Couldn't load the media from any gateway. The file may be offline or the host may be blocking us."));
-    const direct = document.createElement("a");
-    direct.href = cands[cands.length - 1];
-    direct.target = "_blank";
-    direct.rel = "noopener noreferrer";
-    direct.textContent = "Open the media URL in a new tab";
-    fallback.append(direct);
+    const lastCand = cands[cands.length - 1];
+    const isKnownGateway =
+      IPFS_GATEWAYS.some((g) => lastCand.startsWith(g)) ||
+      lastCand.startsWith("https://arweave.net/");
+    if (isKnownGateway) {
+      const direct = document.createElement("a");
+      direct.href = lastCand;
+      direct.target = "_blank";
+      direct.rel = "noopener noreferrer";
+      direct.textContent = "Open the media URL in a new tab";
+      fallback.append(direct);
+    }
     node.replaceWith(fallback);
   });
   return node;
