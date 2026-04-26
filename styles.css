@@ -436,6 +436,19 @@ footer {
 .scan-header strong { color: var(--text); }
 .scan-header .muted { margin-left: 6px; }
 
+.scan-batch-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  margin: 12px 0;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.scan-batch-bar .muted { flex: 1 1 200px; min-width: 0; }
+
 .scan-list {
   display: flex;
   flex-direction: column;

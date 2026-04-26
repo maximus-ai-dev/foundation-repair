@@ -1100,6 +1100,31 @@ function renderScanResults(results) {
     "Each listing below can be cancelled right here \u2014 no need to scroll. Click the button, approve in your wallet, and the piece comes back to you.");
   ui.scanPanel.append(help);
 
+  // Count cancellable actions (skipping locked auctions). If there are more
+  // than one, offer a one-click "Cancel all" that queues each cancel
+  // sequentially. Each is still a separate transaction the user signs in
+  // their wallet \u2014 there's no contract-level multicall on Foundation's side.
+  const totalActions = results.reduce((n, r) => {
+    let count = 0;
+    if (r.hasAuction && !r.auctionHasBid) count++;
+    if (r.hasBuyPrice) count++;
+    return n + count;
+  }, 0);
+
+  if (totalActions >= 2) {
+    const batchBar = el("div", "scan-batch-bar");
+    const batchBtn = el("button", "btn primary");
+    batchBtn.type = "button";
+    batchBtn.id = "batch-cancel-btn";
+    batchBtn.textContent = `Cancel all (${totalActions} transaction${totalActions === 1 ? "" : "s"})`;
+    batchBtn.addEventListener("click", cancelAllListings);
+    batchBar.append(batchBtn);
+    const note = el("span", "muted small",
+      `You'll be asked to sign ${totalActions} separate transaction${totalActions === 1 ? "" : "s"} \u2014 Foundation's contract doesn't support batching. Reject any popup to stop the rest.`);
+    batchBar.append(note);
+    ui.scanPanel.append(batchBar);
+  }
+
   const list = el("div", "scan-list");
   for (const r of results) {
     list.append(buildScanRow(r));
@@ -1108,8 +1133,74 @@ function renderScanResults(results) {
   ui.scanPanel.hidden = false;
 }
 
+// One-click sequential cancel-all. Walks visible scan rows, queues each
+// cancellable action, and processes them one at a time. Stops if the user
+// rejects a wallet popup so we don't pop up the rest unnecessarily.
+let batchInFlight = false;
+async function cancelAllListings() {
+  if (batchInFlight) return;
+  batchInFlight = true;
+  const btn = document.getElementById("batch-cancel-btn");
+  if (btn) btn.disabled = true;
+
+  // Collect actions from current visible rows. Reading from the DOM (not the
+  // original scan results) means we automatically skip rows that have already
+  // moved to "done" via individual clicks since the scan finished.
+  const queue = [];
+  for (const rowEl of ui.scanPanel.querySelectorAll(".scan-item:not(.done)")) {
+    const r = rowEl.__rowData;
+    if (!r) continue;
+    if (r.hasAuction && !r.auctionHasBid) queue.push({ rowEl, r, kind: "auction" });
+    if (r.hasBuyPrice) queue.push({ rowEl, r, kind: "buyprice" });
+  }
+
+  if (queue.length === 0) {
+    log("Nothing left to cancel.");
+    batchInFlight = false;
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  log(`Starting batch cancel: ${queue.length} transaction${queue.length === 1 ? "" : "s"}. You'll see a wallet popup for each.`);
+
+  let done = 0;
+  let stopped = false;
+  for (let i = 0; i < queue.length; i++) {
+    const { rowEl, r, kind } = queue[i];
+    if (btn) btn.textContent = `Cancelling ${i + 1} of ${queue.length}\u2026`;
+
+    const result = kind === "auction"
+      ? await rowCancelAuction(r, rowEl, null)
+      : await rowCancelBuyPrice(r, rowEl, null);
+
+    if (result?.ok) {
+      done++;
+    } else if (result?.rejected) {
+      log(`You rejected the wallet popup. Stopping batch \u2014 ${done} of ${queue.length} cancelled.`);
+      stopped = true;
+      break;
+    } else {
+      // Other failure (revert, RPC error). Skip and continue.
+      log(`Skipping row ${i + 1} of ${queue.length} due to error. Continuing with the rest.`);
+    }
+  }
+
+  if (!stopped) {
+    log(`Batch complete: ${done} of ${queue.length} cancelled.`);
+  }
+
+  batchInFlight = false;
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = `Cancel all (${queue.length - done} transaction${queue.length - done === 1 ? "" : "s"})`;
+    if (queue.length - done <= 0) btn.remove();
+  }
+}
+
 function buildScanRow(r) {
   const row = el("div", "scan-item");
+  // Attach the row data so batch-cancel can iterate without re-parsing.
+  row.__rowData = r;
 
   const info = el("div", "scan-item-info");
   const titleLine = el("div", "scan-item-title");
@@ -1166,9 +1257,12 @@ function buildScanRow(r) {
 // routing through step 2. Makes bulk cleanup practical for artists with
 // many listings.
 
+// Returns { ok: true } on success, { ok: false, rejected: true } if the user
+// rejected the wallet popup, { ok: false } for any other error. Lets the
+// batch-cancel loop decide whether to keep going.
 async function rowCancelAuction(r, rowEl, btn) {
-  if (!signer) { log("Connect your wallet first."); return; }
-  if (!isSupportedChain(chainId)) { log("Switch to a supported network first."); return; }
+  if (!signer) { log("Connect your wallet first."); return { ok: false }; }
+  if (!isSupportedChain(chainId)) { log("Switch to a supported network first."); return { ok: false }; }
 
   setRowBusy(rowEl, "Confirm in your wallet\u2026");
   try {
@@ -1180,15 +1274,17 @@ async function rowCancelAuction(r, rowEl, btn) {
     await tx.wait();
     log("\u2713 Auction ended.", { link: txLink(tx.hash) });
     await rerenderRowAfterCancel(r, rowEl);
+    return { ok: true };
   } catch (err) {
     log(`Couldn't end the auction: ${explainRevert(err)}`);
     clearRowBusy(rowEl);
+    return { ok: false, rejected: err?.code === "ACTION_REJECTED" };
   }
 }
 
 async function rowCancelBuyPrice(r, rowEl, btn) {
-  if (!signer) { log("Connect your wallet first."); return; }
-  if (!isSupportedChain(chainId)) { log("Switch to a supported network first."); return; }
+  if (!signer) { log("Connect your wallet first."); return { ok: false }; }
+  if (!isSupportedChain(chainId)) { log("Switch to a supported network first."); return { ok: false }; }
 
   setRowBusy(rowEl, "Confirm in your wallet\u2026");
   try {
@@ -1200,9 +1296,11 @@ async function rowCancelBuyPrice(r, rowEl, btn) {
     await tx.wait();
     log("\u2713 Price removed.", { link: txLink(tx.hash) });
     await rerenderRowAfterCancel(r, rowEl);
+    return { ok: true };
   } catch (err) {
     log(`Couldn't remove the price: ${explainRevert(err)}`);
     clearRowBusy(rowEl);
+    return { ok: false, rejected: err?.code === "ACTION_REJECTED" };
   }
 }
 
