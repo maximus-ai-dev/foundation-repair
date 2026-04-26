@@ -447,7 +447,28 @@ footer {
   border: 1px solid var(--border);
   border-radius: 10px;
 }
-.scan-batch-bar .muted { flex: 1 1 200px; min-width: 0; }
+.scan-batch-bar > .muted { flex: 1 1 200px; min-width: 0; }
+
+.batch-size-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.batch-size-label input {
+  width: 80px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 14px;
+  background: var(--bg-soft);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  text-align: right;
+}
+.batch-size-label input:focus { border-color: var(--accent); }
+.batch-size-label input:disabled { opacity: 0.5; }
 
 .scan-list {
   display: flex;

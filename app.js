@@ -99,6 +99,7 @@ let chainId  = null;      // bigint
 let lastLookup = null;
 let eip1193Provider = null; // the raw EIP-1193 provider, retained for chain-switch calls
 let connectBtnMode = "connect"; // "connect" | "switch" — controls what the wallet-bar button does
+let walletCapabilities = null; // result of wallet_getCapabilities, keyed by chain id hex
 
 // --- helpers --------------------------------------------------------------
 
@@ -417,9 +418,37 @@ async function connectWith(wallet) {
 
     eip1193.on?.("accountsChanged", () => location.reload());
     eip1193.on?.("chainChanged",    () => location.reload());
+
+    // EIP-5792: detect whether the wallet can batch transactions. If so,
+    // "Cancel all" will use one signing experience instead of N popups.
+    walletCapabilities = null;
+    try {
+      walletCapabilities = await eip1193.request({
+        method: "wallet_getCapabilities",
+        params: [account],
+      });
+    } catch {
+      // Method not supported — that's fine, we fall back to sequential signing.
+    }
   } catch (err) {
     log(`Connection failed: ${explainRevert(err)}`);
   }
+}
+
+// Whether the connected wallet can batch transactions on the current chain
+// via EIP-5792 (wallet_sendCalls).
+function walletSupportsBatching() {
+  if (!walletCapabilities || !chainId) return false;
+  const cInfo = chain(chainId);
+  if (!cInfo) return false;
+  // Look up by either lowercase or canonical hex form.
+  const caps = walletCapabilities[cInfo.hex] || walletCapabilities[cInfo.hex.toLowerCase()];
+  if (!caps) return false;
+  // EIP-5792 declares atomicBatch.supported. Some wallets also use
+  // atomic.status === "supported" or "ready". Be permissive.
+  if (caps.atomicBatch?.supported === true) return true;
+  if (caps.atomic?.status && caps.atomic.status !== "unsupported") return true;
+  return false;
 }
 
 // Friendly chain names for common non-mainnet chains so users see "Polygon"
@@ -1112,17 +1141,7 @@ function renderScanResults(results) {
   }, 0);
 
   if (totalActions >= 2) {
-    const batchBar = el("div", "scan-batch-bar");
-    const batchBtn = el("button", "btn primary");
-    batchBtn.type = "button";
-    batchBtn.id = "batch-cancel-btn";
-    batchBtn.textContent = `Cancel all (${totalActions} transaction${totalActions === 1 ? "" : "s"})`;
-    batchBtn.addEventListener("click", cancelAllListings);
-    batchBar.append(batchBtn);
-    const note = el("span", "muted small",
-      `You'll be asked to sign ${totalActions} separate transaction${totalActions === 1 ? "" : "s"} \u2014 Foundation's contract doesn't support batching. Reject any popup to stop the rest.`);
-    batchBar.append(note);
-    ui.scanPanel.append(batchBar);
+    ui.scanPanel.append(buildBatchBar(totalActions));
   }
 
   const list = el("div", "scan-list");
@@ -1133,46 +1152,219 @@ function renderScanResults(results) {
   ui.scanPanel.hidden = false;
 }
 
-// One-click sequential cancel-all. Walks visible scan rows, queues each
-// cancellable action, and processes them one at a time. Stops if the user
-// rejects a wallet popup so we don't pop up the rest unnecessarily.
+// Build the batch-cancel control: label, batch-size input, and the action
+// button. Label & button text adapt to whether the wallet supports EIP-5792
+// (one signing experience) or only sequential signing (N popups).
+function buildBatchBar(totalActions) {
+  const bar = el("div", "scan-batch-bar");
+  const batched = walletSupportsBatching();
+
+  const note = el("span", "muted small");
+  if (batched) {
+    note.textContent = "Your wallet supports batched signing \u2014 you'll approve all of them in one wallet interaction.";
+  } else {
+    note.textContent = "Your wallet doesn't support batched signing on this chain, so you'll see a wallet popup per cancel. Reject any popup to stop the rest.";
+  }
+
+  const sizeLabel = el("label", "batch-size-label");
+  sizeLabel.append(el("span", "muted small", "How many?"));
+  const sizeInput = document.createElement("input");
+  sizeInput.type = "number";
+  sizeInput.id = "batch-size-input";
+  sizeInput.min = "1";
+  sizeInput.max = String(totalActions);
+  sizeInput.value = String(totalActions);
+  sizeInput.inputMode = "numeric";
+  sizeLabel.append(sizeInput);
+
+  const btn = el("button", "btn primary");
+  btn.type = "button";
+  btn.id = "batch-cancel-btn";
+
+  const updateLabel = () => {
+    const n = Math.min(Math.max(1, parseInt(sizeInput.value, 10) || totalActions), totalActions);
+    btn.textContent = batched
+      ? `Cancel ${n} \u00b7 1 signature`
+      : `Cancel ${n} \u00b7 ${n} signature${n === 1 ? "" : "s"}`;
+  };
+  updateLabel();
+  sizeInput.addEventListener("input", updateLabel);
+
+  btn.addEventListener("click", () => {
+    const n = Math.min(Math.max(1, parseInt(sizeInput.value, 10) || totalActions), totalActions);
+    cancelBatch(n);
+  });
+
+  bar.append(btn, sizeLabel, note);
+  return bar;
+}
+
+// Walks visible scan rows, queues up to `limit` cancellable actions, and
+// processes them. Uses EIP-5792 wallet_sendCalls for one signing experience
+// when the wallet supports it; otherwise falls back to sequential signing.
 let batchInFlight = false;
-async function cancelAllListings() {
+async function cancelBatch(limit) {
   if (batchInFlight) return;
   batchInFlight = true;
   const btn = document.getElementById("batch-cancel-btn");
+  const input = document.getElementById("batch-size-input");
   if (btn) btn.disabled = true;
+  if (input) input.disabled = true;
 
-  // Collect actions from current visible rows. Reading from the DOM (not the
-  // original scan results) means we automatically skip rows that have already
-  // moved to "done" via individual clicks since the scan finished.
+  // Collect cancellable actions from visible rows, capped at `limit`.
   const queue = [];
   for (const rowEl of ui.scanPanel.querySelectorAll(".scan-item:not(.done)")) {
     const r = rowEl.__rowData;
     if (!r) continue;
     if (r.hasAuction && !r.auctionHasBid) queue.push({ rowEl, r, kind: "auction" });
     if (r.hasBuyPrice) queue.push({ rowEl, r, kind: "buyprice" });
+    if (queue.length >= limit) break;
   }
 
   if (queue.length === 0) {
     log("Nothing left to cancel.");
     batchInFlight = false;
     if (btn) btn.disabled = false;
+    if (input) input.disabled = false;
     return;
   }
 
-  log(`Starting batch cancel: ${queue.length} transaction${queue.length === 1 ? "" : "s"}. You'll see a wallet popup for each.`);
+  try {
+    if (walletSupportsBatching()) {
+      await runBatchedSendCalls(queue, btn);
+    } else {
+      await runSequentialBatch(queue, btn);
+    }
+  } finally {
+    batchInFlight = false;
+    if (input) input.disabled = false;
+    // Recompute remaining count and refresh the button label.
+    const remaining = countRemainingActions();
+    if (btn) {
+      btn.disabled = false;
+      if (remaining <= 0) {
+        btn.parentElement?.remove();
+      } else {
+        const evt = new Event("input");
+        if (input) {
+          input.max = String(remaining);
+          if (parseInt(input.value, 10) > remaining) input.value = String(remaining);
+          input.dispatchEvent(evt);
+        }
+      }
+    }
+  }
+}
 
+function countRemainingActions() {
+  let n = 0;
+  for (const rowEl of ui.scanPanel.querySelectorAll(".scan-item:not(.done)")) {
+    const r = rowEl.__rowData;
+    if (!r) continue;
+    if (r.hasAuction && !r.auctionHasBid) n++;
+    if (r.hasBuyPrice) n++;
+  }
+  return n;
+}
+
+// EIP-5792 path: encode every cancel as raw call data, send via
+// wallet_sendCalls, poll wallet_getCallsStatus until confirmed.
+async function runBatchedSendCalls(queue, btn) {
+  const cInfo = chain(chainId);
+  const iface = new ethers.Interface(MARKET_ABI);
+  const calls = queue.map(({ r, kind }) => {
+    if (kind === "auction") {
+      return {
+        to: cInfo.market,
+        data: iface.encodeFunctionData("cancelReserveAuction", [r.auctionId]),
+        value: "0x0",
+      };
+    }
+    return {
+      to: cInfo.market,
+      data: iface.encodeFunctionData("cancelBuyPrice", [r.nftContract, r.tokenId]),
+      value: "0x0",
+    };
+  });
+
+  for (const item of queue) setRowBusy(item.rowEl, "Awaiting batch signature\u2026");
+  if (btn) btn.textContent = `Sign ${queue.length} cancel${queue.length === 1 ? "" : "s"} in your wallet\u2026`;
+  log(`Submitting batch of ${queue.length} cancel(s) for one wallet signature\u2026`);
+
+  let result;
+  try {
+    result = await eip1193Provider.request({
+      method: "wallet_sendCalls",
+      params: [{
+        version: "1.0",
+        chainId: cInfo.hex,
+        from: account,
+        calls,
+      }],
+    });
+  } catch (err) {
+    for (const item of queue) clearRowBusy(item.rowEl);
+    if (err?.code === 4001 || err?.code === "ACTION_REJECTED") {
+      log("You cancelled the batch in your wallet. Nothing was submitted.");
+    } else {
+      log(`Batch failed: ${explainRevert(err)}`);
+    }
+    return;
+  }
+
+  // result is either a string id or { id: string } depending on wallet impl.
+  const callsId = typeof result === "string" ? result : (result?.id || result?.callsId);
+  if (!callsId) {
+    log("Wallet returned an unexpected response from wallet_sendCalls. Falling back to sequential.");
+    return runSequentialBatch(queue, btn);
+  }
+
+  if (btn) btn.textContent = `Mining\u2026 (${queue.length} call${queue.length === 1 ? "" : "s"})`;
+  for (const item of queue) setRowBusy(item.rowEl, "Mining\u2026 waiting for confirmation");
+
+  // Poll for confirmation.
+  let final = null;
+  for (let i = 0; i < 90; i++) {  // ~3 minutes max
+    await new Promise((r) => setTimeout(r, 2000));
+    let status;
+    try {
+      status = await eip1193Provider.request({
+        method: "wallet_getCallsStatus",
+        params: [callsId],
+      });
+    } catch (err) {
+      log(`Couldn't check batch status: ${explainRevert(err)}`);
+      break;
+    }
+    const code = status?.status;
+    // Both string ("CONFIRMED") and numeric (200) status formats exist.
+    if (code === "CONFIRMED" || code === 200) { final = status; break; }
+    if (code === "FAILED" || code === 400 || code === 500) {
+      log(`Batch reported failure status: ${code}`);
+      final = status;
+      break;
+    }
+  }
+
+  // Re-render every row from on-chain state so the UI catches up regardless
+  // of how the wallet reported individual receipts.
+  for (const item of queue) await rerenderRowAfterCancel(item.r, item.rowEl);
+
+  const succeeded = ui.scanPanel.querySelectorAll(".scan-item.done").length;
+  log(`Batch complete: ${succeeded} cancellation(s) reflected on-chain.`);
+}
+
+// Sequential path: pop a wallet popup per cancel.
+async function runSequentialBatch(queue, btn) {
+  log(`Starting batch cancel: ${queue.length} transaction${queue.length === 1 ? "" : "s"}. You'll see a wallet popup for each.`);
   let done = 0;
   let stopped = false;
   for (let i = 0; i < queue.length; i++) {
     const { rowEl, r, kind } = queue[i];
     if (btn) btn.textContent = `Cancelling ${i + 1} of ${queue.length}\u2026`;
-
     const result = kind === "auction"
       ? await rowCancelAuction(r, rowEl, null)
       : await rowCancelBuyPrice(r, rowEl, null);
-
     if (result?.ok) {
       done++;
     } else if (result?.rejected) {
@@ -1180,21 +1372,10 @@ async function cancelAllListings() {
       stopped = true;
       break;
     } else {
-      // Other failure (revert, RPC error). Skip and continue.
       log(`Skipping row ${i + 1} of ${queue.length} due to error. Continuing with the rest.`);
     }
   }
-
-  if (!stopped) {
-    log(`Batch complete: ${done} of ${queue.length} cancelled.`);
-  }
-
-  batchInFlight = false;
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = `Cancel all (${queue.length - done} transaction${queue.length - done === 1 ? "" : "s"})`;
-    if (queue.length - done <= 0) btn.remove();
-  }
+  if (!stopped) log(`Batch complete: ${done} of ${queue.length} cancelled.`);
 }
 
 function buildScanRow(r) {
